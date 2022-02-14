@@ -1,19 +1,22 @@
 # -*- coding: utf-8 -*-
-#
-# python-srt2ass: https://github.com/ewwink/python-srt2ass
-# by: ewwink
-#
 
 import argparse
 import codecs
+from distutils import filelist
+from inspect import getfile
 import os
 import re
 import sys
 from ast import Store
 from concurrent.futures import process
 from glob import glob
+from tkinter.tix import Tree
 
 import opencc
+
+STR_CH_STYLE = 'Style: Default,Droid Sans Fallback,23,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,88,100,0,0,1,0.1,2,2,10,10,10,1'
+STR_EN_STYLE = 'Style: eng,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.1,2,2,10,10,30,1'
+STR_UNDER_ENG_STYLE = '{\\fsp0\\fnVerdana\\fs12\\1c&H003CA8DC}'
 
 
 def fileopen(input_file):
@@ -40,13 +43,16 @@ def srt2ass(input_file, en=False):
         print(input_file + ' not exist')
         return
 
-    print('processing:'+input_file)
+    print('processing: '+input_file)
 
     src = fileopen(input_file)
     tmp = src[0]
     encoding = src[1]
     src = ''
     utf8bom = ''
+
+    if not re.search(r'[\u4e00-\u9fa5]', tmp):
+        en = True
 
     if u'\ufeff' in tmp:
         tmp = tmp.replace(u'\ufeff', '')
@@ -72,7 +78,7 @@ def srt2ass(input_file, en=False):
         else:
             if re.match('-?\d\d:\d\d:\d\d', line):
                 line = line.replace('-0', '0')
-                if en is True:
+                if en:
                     tmpLines += 'Dialogue: 0,' + line + ',eng,,0,0,0,,'
                 else:
                     tmpLines += 'Dialogue: 0,' + line + ',Default,,0,0,0,,'
@@ -80,7 +86,10 @@ def srt2ass(input_file, en=False):
                 if lineCount < 2:
                     tmpLines += line
                 else:
-                    tmpLines += '\\N' + line
+                    if en:
+                        tmpLines += '\\N' + line
+                    else:
+                        tmpLines += '\\N' + STR_UNDER_ENG_STYLE + line
             lineCount += 1
         ln += 1
 
@@ -95,8 +104,7 @@ def srt2ass(input_file, en=False):
         r'<font\s+color="?#(\w{2})(\w{2})(\w{2})"?>', "{\\\\c&H\\3\\2\\1&}", subLines)
     subLines = re.sub(r'</font>', "", subLines)
 
-    if en is True:
-        head_str = '''[Script Info]
+    head_str = '''[Script Info]
 ; This is an Advanced Sub Station Alpha v4+ script.
 Title:
 ScriptType: v4.00+
@@ -104,20 +112,13 @@ Collisions: Normal
 PlayDepth: 0
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: eng,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.1,2,2,10,10,30,1
-[Events]
-Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text'''
+'''
+    if en:
+        head_str += STR_EN_STYLE
     else:
-        head_str = '''[Script Info]
-; This is an Advanced Sub Station Alpha v4+ script.
-Title:
-ScriptType: v4.00+
-Collisions: Normal
-PlayDepth: 0
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Droid Sans Fallback,23,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,88,100,0,0,1,0.1,2,2,10,10,10,1
-[Events]
+        head_str += STR_CH_STYLE
+    head_str += '''
+[event]
 Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text'''
 
     output_str = utf8bom + head_str + '\n' + subLines
@@ -136,33 +137,64 @@ def loadArgs():
     parser.add_argument('file',
                         help='srt file location',
                         nargs='*',
-                        default='*.srt')
+                        default='.')
     parser.add_argument("-e", "--english", "-en",
                         help="handle only ENG subtitles",
                         action='store_true')
-
+    parser.add_argument("-d", "--delete",
+                        help="delete the original .srt file",
+                        action='store_true')
+    parser.add_argument("--all-dir", '-a',
+                        help="process all .srt in child dir",
+                        action='store_true')
     global Args
     Args = parser.parse_args()
 
 
-def main():
-    loadArgs()
-
-    print(Args)
+def getFilelist():
 
     file = Args.file
-    isEnglish = Args.english
+    isAllDir = Args.all_dir
 
+    filelist = []
+    # 读所有参数
     if type(file) is list:
-        for arg in file:
-            srt2ass(arg, isEnglish)
+        filelist += file
     else:
         if '*' in file:
-            filelist = glob(file)
-            for arg in filelist:
-                srt2ass(arg, isEnglish)
+            filelist += glob(file)
         else:
-            srt2ass(file, isEnglish)
+            filelist.append(file)
+
+    for arg in filelist:
+        if isAllDir:
+            if os.path.isdir(arg):
+                for home, dirs, files in os.walk(arg):
+                    for filename in files:
+                        filelist.append(os.path.join(home, filename))
+        elif os.path.isdir(arg):
+            filelist += glob(os.path.join(arg, '*.srt'))
+
+    filelist = list(filter(lambda x: os.path.isfile(x)
+                    and '.srt' in x, filelist))
+    #print(filelist)
+    return filelist
+
+
+def main():
+    loadArgs()
+    print(Args)
+
+    isEnglish = Args.english
+    isDelete = Args.delete
+
+    filelist = getFilelist()
+
+    for arg in filelist:
+        srt2ass(arg, isEnglish)
+        if isDelete:
+            os.remove(arg)
+            print('deleted: '+arg)
 
 
 if __name__ == '__main__':

@@ -1,36 +1,16 @@
 # -*- coding: utf-8 -*-
-
 import argparse
-import codecs
 import os
 import re
-import sys
-from ast import Store
-from concurrent.futures import process
-from distutils import filelist
 from glob import glob
-from inspect import getfile
-from tkinter.ttk import Style
+from utils import fileopen
 import opencc
+
+from merge import merge2srts
 
 STR_CH_STYLE = 'Style: Default,Droid Sans Fallback,23,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,88,100,0,0,1,0.1,2,2,10,10,10,1'
 STR_EN_STYLE = 'Style: Default,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.1,2,2,10,10,30,1'
 STR_UNDER_ENG_STYLE = '{\\fsp0\\fnVerdana\\fs12\\1c&H003CA8DC}'
-
-
-def fileopen(input_file):
-    encodings = ["utf-32", "utf-16", "utf-8",
-                 "cp1252", "gb2312", "gbk", "big5"]
-    tmp = ''
-    for enc in encodings:
-        try:
-            with codecs.open(input_file, mode="r", encoding=enc) as fd:
-                tmp = fd.read()
-                break
-        except:
-            # print enc + ' failed'
-            continue
-    return [tmp, enc]
 
 
 def srt2ass(input_file, en=False):
@@ -101,6 +81,9 @@ def srt2ass(input_file, en=False):
         r'<font\s+color="?#(\w{2})(\w{2})(\w{2})"?>', "{\\\\c&H\\3\\2\\1&}", subLines)
     subLines = re.sub(r'</font>', "", subLines)
 
+    converter = opencc.OpenCC('s2hk.json')
+    subLines = converter.convert(subLines)
+
     head_str = '''[Script Info]
 ; This is an Advanced Sub Station Alpha v4+ script.
 Title:
@@ -124,13 +107,13 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
     with open(output_file, 'wb') as output:
         output.write(output_str)
 
-    return 
+    return
 
 
 def loadArgs():
     parser = argparse.ArgumentParser()
     parser.add_argument('file',
-                        help='srt file location',
+                        help='srt file location, default all .srt files in current folder',
                         nargs='*',
                         default='.')
     parser.add_argument("-e", "--english", "-en",
@@ -139,12 +122,17 @@ def loadArgs():
     parser.add_argument("-d", "--delete",
                         help="delete the original .srt file",
                         action='store_true')
-    parser.add_argument('-a',"--all-dir", 
+    parser.add_argument('-a', "--all-dir",
                         help="process all .srt/.ass in child dir",
                         action='store_true')
-    parser.add_argument('-u',"--update-ass", 
-                        help="update .ass to custom style",
-                        action='store_true')
+    group = parser.add_mutually_exclusive_group()
+
+    group.add_argument('-u', "--update-ass",
+                       help="update .ass to custom style",
+                       action='store_true')
+    group.add_argument('-m', "--merge-srt",
+                       help="merge srts ",
+                       action='store_true')
     global Args
     Args = parser.parse_args()
 
@@ -223,8 +211,8 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 '''+STR_CH_STYLE+'''
 [Events]
 Format:''', tmp)
-            sytlestr=STR_UNDER_ENG_STYLE.replace('\\','\\\\')
-            print(re.sub(r'N\{(.*)\}','N'+sytlestr,  output_str))
+            sytlestr = STR_UNDER_ENG_STYLE.replace('\\', '\\\\')
+            output_str = re.sub(r'N\{(.*)\}', 'N'+sytlestr,  output_str)
 
         output_str += utf8bom
         output_str = output_str.encode(encoding)
@@ -233,9 +221,29 @@ Format:''', tmp)
             output.write(output_str)
         if os.path.isfile(output_file):
             os.remove(output_file)
+        if Args.delete:
+            os.remove(input_file)
         os.rename("%s.bak" % output_file, output_file)
 
     return
+
+
+def mergeFilelist(filelist):
+    file1 = ''
+    outFilelist=[]
+    for file in filelist:
+        if(not file1):
+            file1 = file
+            output_file = re.sub(r'_track[\s\S]*]', '', file1)
+            continue
+        else:
+            if('ch'in file1 or 'en' in file):
+                merge2srts([file1, file], output_file)
+            else:
+                merge2srts([file, file1], output_file)
+            outFilelist.append(output_file)
+            file1=''
+    return outFilelist
 
 
 def main():
@@ -244,11 +252,16 @@ def main():
 
     filelist = getFilelist()
 
-    if not Args.update_ass:
+    if not Args.update_ass and not Args.merge_srt:
         srt2assAll(filelist)
-    else:
-        print
+    elif not Args.merge_srt:
         updateAssStyle(filelist)
+    else:
+        mergedFiles=mergeFilelist(filelist)
+        srt2assAll(mergedFiles)
+    return
+
+
 
 
 if __name__ == '__main__':

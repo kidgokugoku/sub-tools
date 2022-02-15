@@ -113,6 +113,6 @@ def timeMerge(c1, c2):
                 captmp.content.append(c2[index2].content[0])
             mergedContent.append(captmp)
             index2 += 1
-        print(captmp)
+        #print(captmp)
     return mergedContent
 

@@ -46,17 +46,17 @@ def srt2ass(input_file, en=False):
     output_file = '.'.join(input_file.split('.')[:-1])
     output_file += '.ass'
     output_file = re.sub(r'_track[\s\S]*]', '', output_file)
-
+    
     for ln in range(len(lines)):
         line = lines[ln]
-        if line.isdigit() and re.match('-?\d\d:\d\d:\d\d', lines[(ln+1)]):
+        if line.isdigit() and re.match('-?\d+:\d\d:\d\d', lines[(ln+1)]):
             if tmpLines:
                 subLines += tmpLines + "\n"
             tmpLines = ''
             lineCount = 0
             continue
         else:
-            if re.match('-?\d\d:\d\d:\d\d', line):
+            if re.match('-?\d+:\d\d:\d\d', line):
                 line = line.replace('-0', '0')
                 tmpLines += 'Dialogue: 0,' + line + ',Default,,0,0,0,,'
             else:
@@ -70,9 +70,9 @@ def srt2ass(input_file, en=False):
             lineCount += 1
         ln += 1
 
-    subLines += tmpLines + "\n"
+    subLines += tmpLines + "\r\n"
 
-    subLines = re.sub(r'\d(\d:\d{2}:\d{2}),(\d{2})\d', '\\1.\\2', subLines)
+    subLines = re.sub(r'\d*(\d:\d{2}:\d{2}),(\d{2})\d', '\\1.\\2', subLines)
     subLines = re.sub(r'\s+-->\s+', ',', subLines)
     # replace style
     subLines = re.sub(r'<([ubi])>', "{\\\\\g<1>1}", subLines)

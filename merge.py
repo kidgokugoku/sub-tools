@@ -1,15 +1,14 @@
-from cgi import print_environ_usage
-import os
 import re
-import sys
 from utils import fileopen
 from collections import namedtuple
 
 sub = namedtuple("sub", "begin, end, content,beginTime,endTime")
+subEx = namedtuple("sub", "begin, end, content")
+
 utf8bom = ''
 enc = ''
 inputcontent = []
-timeShift = 1000  # ms
+timeShift = 600  # ms
 
 
 def process(line):
@@ -18,6 +17,15 @@ def process(line):
     beginTime = time(begin)
     endTime = time(end)
     return sub(begin, end, content, beginTime, endTime)
+
+
+def processEx(line):
+    (begin, end) = line[1].strip().split(" --> ")
+    content1 = line[2]
+    content2 = ''
+    if len(line)-3:
+        content2 = line[3]
+    return [subEx(begin, end, content1), subEx(begin, end, content2)]
 
 
 def time(rawtime):
@@ -31,8 +39,12 @@ def printsub(raw, f, enc='utf-8'):
     for i in range(len(raw)):
         output += ("%d\r\n" % (i+1))
         output += ("%s --> %s \r\n" % (raw[i].begin, raw[i].end))
-        for c in raw[i].content:
-            output += ("%s" % c)
+        if type(raw[i].content) == list:
+            for c in raw[i].content:
+                output += ("%s" % c)
+                output += ("\r\n")
+        else:
+            output += ("%s" % raw[i].content)
             output += ("\r\n")
     output = output.encode(enc)
     with open(f, 'wb') as output_file:
@@ -83,6 +95,41 @@ def merge2srts(inputfile, outputfile):
     return
 
 
+def extractSrt(inputfile):
+    print("extracting: "+inputfile)
+    content1 = []
+    content2 = []
+    line = []
+    global enc
+    global utf8bom
+
+    src = fileopen(inputfile)
+    tmp = src[0]
+    enc = src[1]
+    src = ''
+    if u'\ufeff' in tmp:
+        tmp = tmp.replace(u'\ufeff', '')
+        utf8bom = u'\ufeff'
+
+    tmp = tmp.replace("\r", "")
+    lines = [x.strip() for x in tmp.split("\n") if x.strip()]
+    tmp = ''
+
+    for l in lines:
+        # print(l)
+        if(re.sub(r'[0-9]+', '', l) == ''):
+            if(not len(line)):
+                line = [l]
+            else:
+                content1.append(processEx(line)[0])
+                content2.append(processEx(line)[1])
+                line = [l]
+        else:
+            line.append(l)
+    printsub(content1, re.sub('.srt', '_1.srt', inputfile), enc)
+    printsub(content2, re.sub('.srt', '_2.srt', inputfile), enc)
+
+
 def timeMerge(c1, c2):
     lockType = index1 = index2 = 0
     capTime1 = capTime2 = 0
@@ -113,6 +160,5 @@ def timeMerge(c1, c2):
                 captmp.content.append(c2[index2].content[0])
             mergedContent.append(captmp)
             index2 += 1
-        #print(captmp)
+        # print(captmp)
     return mergedContent
-

@@ -7,7 +7,7 @@ from utils import fileopen
 import opencc
 
 from merge import merge2srts
-
+from merge import extractSrt
 STR_CH_STYLE = 'Style: Default,Droid Sans Fallback,23,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,88,100,0,0,1,0.1,2,2,10,10,10,1'
 STR_EN_STYLE = 'Style: Default,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.1,2,2,10,10,30,1'
 STR_UNDER_ENG_STYLE = '{\\fsp0\\fnVerdana\\fs12\\1c&H003CA8DC}'
@@ -133,6 +133,9 @@ def loadArgs():
     group.add_argument('-m', "--merge-srt",
                        help="merge srts ",
                        action='store_true')
+    group.add_argument('--extract-srt', 
+                       help="extract srt ",
+                       action='store_true')
     global Args
     Args = parser.parse_args()
 
@@ -176,9 +179,7 @@ def srt2assAll(filelist):
     for arg in filelist:
         srt2ass(arg, Args.english)
         if Args.delete:
-            os.remove(arg)
-            print('deleted: '+arg)
-
+            removeFile(arg)
     return
 
 
@@ -222,7 +223,7 @@ Format:''', tmp)
         if os.path.isfile(output_file):
             os.remove(output_file)
         if Args.delete:
-            os.remove(input_file)
+            removeFile(input_file)
         os.rename("%s.bak" % output_file, output_file)
 
     return
@@ -230,20 +231,29 @@ Format:''', tmp)
 
 def mergeFilelist(filelist):
     file1 = ''
-    outFilelist=[]
+    outFilelist = []
     for file in filelist:
         if(not file1):
             file1 = file
             output_file = re.sub(r'_track[\s\S]*]', '', file1)
             continue
         else:
-            if('ch'in file1 or 'en' in file):
+            if('ch' in file1 or 'en' in file):
                 merge2srts([file1, file], output_file)
             else:
                 merge2srts([file, file1], output_file)
             outFilelist.append(output_file)
-            file1=''
+            file1 = ''
+    if(Args.delete):
+        for arg in filelist:
+            os.remove(arg)
+            print('deleted: '+arg)
     return outFilelist
+
+
+def removeFile(file):
+    os.remove(file)
+    print('deleted: '+file)
 
 
 def main():
@@ -252,16 +262,16 @@ def main():
 
     filelist = getFilelist()
 
-    if not Args.update_ass and not Args.merge_srt:
-        srt2assAll(filelist)
-    elif not Args.merge_srt:
+    if Args.extract_srt:
+        extractSrt(filelist[0])
+    elif  Args.update_ass:
         updateAssStyle(filelist)
-    else:
-        mergedFiles=mergeFilelist(filelist)
+    elif  Args.merge_srt:
+        mergedFiles = mergeFilelist(filelist)
         srt2assAll(mergedFiles)
+    else:
+        srt2assAll(filelist)
     return
-
-
 
 
 if __name__ == '__main__':

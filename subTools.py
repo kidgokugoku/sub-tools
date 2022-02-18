@@ -8,9 +8,12 @@ import opencc
 
 from merge import merge2srts
 from merge import extractSrt
-STR_CH_STYLE = 'Style: Default,Droid Sans Fallback,23,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,88,100,0,0,1,0.1,2,2,10,10,10,1'
-STR_EN_STYLE = 'Style: Default,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.1,2,2,10,10,30,1'
-STR_UNDER_ENG_STYLE = '{\\fsp0\\fnVerdana\\fs12\\1c&H003CA8DC}'
+# Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+STR_CH_STYLE = '''Style: Default,Droid Sans Fallback,23,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,88,100,0,0,1,0.2,2,2,10,10,10,1
+Style: Eng,Verdana,12,&H003CA8DC,&H000000FF,&H00000000,&H00000000,-1,0,0,0,90,100,0,0,1,0.1,2,2,10,10,10,1'''
+STR_EN_STYLE = 'Style: Default,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.3,3,2,10,10,20,1'
+#STR_UNDER_ENG_STYLE = '{\\fsp0\\fnVerdana\\fs12\\1c&H003CA8DC}'
+STR_UNDER_ENG_STYLE = '{\\rEng}'
 
 
 def srt2ass(input_file, en=False):
@@ -46,7 +49,7 @@ def srt2ass(input_file, en=False):
     output_file = '.'.join(input_file.split('.')[:-1])
     output_file += '.ass'
     output_file = re.sub(r'_track[\s\S]*]', '', output_file)
-    
+
     for ln in range(len(lines)):
         line = lines[ln]
         if line.isdigit() and re.match('-?\d+:\d\d:\d\d', lines[(ln+1)]):
@@ -133,7 +136,7 @@ def loadArgs():
     group.add_argument('-m', "--merge-srt",
                        help="merge srts ",
                        action='store_true')
-    group.add_argument('--extract-srt', 
+    group.add_argument('--extract-srt',
                        help="extract srt ",
                        action='store_true')
     global Args
@@ -214,6 +217,8 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Format:''', tmp)
             sytlestr = STR_UNDER_ENG_STYLE.replace('\\', '\\\\')
             output_str = re.sub(r'N\{(.*)\}', 'N'+sytlestr,  output_str)
+            output_str = re.sub(r'Dialogue:(.*),.*,NTP',
+                                r'Dialogue:\1,Default,NTP', output_str)
 
         output_str += utf8bom
         output_str = output_str.encode(encoding)
@@ -264,9 +269,9 @@ def main():
 
     if Args.extract_srt:
         extractSrt(filelist[0])
-    elif  Args.update_ass:
+    elif Args.update_ass:
         updateAssStyle(filelist)
-    elif  Args.merge_srt:
+    elif Args.merge_srt:
         mergedFiles = mergeFilelist(filelist)
         srt2assAll(mergedFiles)
     else:

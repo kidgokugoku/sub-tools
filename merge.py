@@ -8,7 +8,7 @@ subEx = namedtuple("sub", "begin, end, content")
 utf8bom = ''
 enc = ''
 inputcontent = []
-timeShift = 600  # ms
+timeShift = 1000  # ms
 
 
 def process(line):

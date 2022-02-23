@@ -9,7 +9,7 @@
 不会备份更改前的字幕，请自行做好备份
 
 ```
-usage: srt2ass.py [-h] [-e] [-d] [-a] [-u | -m | --extract-srt] [file ...]
+usage: subTools.py [-h] [-e] [-d] [-a] [-u | -m | --extract-srt] [file ...]
 
 positional arguments:
   file                srt file location, default all .srt files in current folder

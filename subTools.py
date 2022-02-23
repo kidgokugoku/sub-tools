@@ -8,8 +8,6 @@ from glob import glob
 
 import opencc
 
-from utils import fileopen
-
 # srt2ass config
 
 # Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding

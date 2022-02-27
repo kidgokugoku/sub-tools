@@ -116,7 +116,8 @@ def merge2srts(inputfile, outputfile):
                     content.append(process(line))
                     line = [l]
             else:
-                line.append(l)
+                if(len(line)):
+                    line.append(l)
             #line = []
         content.append(process(line))
         if(not len(content1)):
@@ -386,21 +387,21 @@ def updateAssStyle(filelist):
             tmp = tmp.replace(u'\ufeff', '')
             utf8bom = u'\ufeff'
         if Args.english:
-            output_str = re.sub(r'Styles][\s\S]*Format:', '''Styles]
+            output_str = re.sub(r'(Styles])?[\s\S]*Format:', '''[V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 '''+STR_EN_STYLE+'''
 [Events]
 Format:''', tmp)
         else:
-            output_str = re.sub(r'Styles][\s\S]*Format:', '''Styles]
+            output_str = re.sub(r'(Styles])?[\s\S]*Format:', '''[V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 '''+STR_CH_STYLE+'''
 [Events]
 Format:''', tmp)
             sytlestr = STR_UNDER_ENG_STYLE.replace('\\', '\\\\')
             output_str = re.sub(r'N\{(.*)\}', 'N'+sytlestr,  output_str)
-            output_str = re.sub(r'Dialogue:(.*),.*,NTP',
-                                r'Dialogue:\1,Default,NTP', output_str)
+            output_str = re.sub(r'Dialogue:(.*),(.*),,0,0,0,,',
+                                r'Dialogue:\1,Default,,0,0,0,,', output_str)
 
         output_str += utf8bom
         output_str = output_str.encode(encoding)

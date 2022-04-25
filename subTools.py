@@ -87,6 +87,7 @@ def printsub(raw, f, enc='utf-8'):
 def merge2srts(inputfile, outputfile):
     content1 = []
     content = []
+    CH_first_flag = 0
     for f in inputfile:
         print("merging: "+f)
         line = []
@@ -102,7 +103,7 @@ def merge2srts(inputfile, outputfile):
             tmp = tmp.replace(u'\ufeff', '')
             utf8bom = u'\ufeff'
             enc = 'utf-8'
-
+        CH_first_flag = re.search(r'[\u4e00-\u9fa5]', tmp)
         tmp = tmp.replace("\r", "")
         lines = [x.strip() for x in tmp.split("\n") if x.strip()]
         tmp = ''
@@ -123,9 +124,12 @@ def merge2srts(inputfile, outputfile):
         if(not len(content1)):
             content1 = content
             content = []
-    # print(content)
-    #timeMerge(content1, content)
-    outputraw = timeMerge(content1, content)
+
+    if not CH_first_flag:
+        outputraw = timeMerge(content1, content)
+    else:
+        outputraw = timeMerge(content, content1)
+
     printsub(outputraw, outputfile, enc)
     return
 
@@ -399,9 +403,10 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 [Events]
 Format:''', tmp)
             sytlestr = STR_UNDER_ENG_STYLE.replace('\\', '\\\\')
-            output_str = re.sub(r'N\{(.*)\}', 'N'+sytlestr,  output_str)
-            output_str = re.sub(r'Dialogue:(.*),(.*),,0,0,0,,',
-                                r'Dialogue:\1,Default,,0,0,0,,', output_str)
+            output_str = re.sub('{\r}', '',  output_str)
+            output_str = re.sub(r'N\{(.*)\}', 'N'+sytlestr,  output_str)  # 英文行
+            output_str = re.sub(r'Dialogue:(.*),.*,,0,0,0,,',
+                                r'Dialogue:\1,Default,,0,0,0,,', output_str)  # 默认字体
 
         output_str += utf8bom
         output_str = output_str.encode(encoding)

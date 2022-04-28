@@ -44,7 +44,11 @@ def fileopen(input_file):
 
 
 def process(line):
-    (begin, end) = line[1].strip().split(" --> ")
+    try:
+        (begin, end) = line[1].strip().split(" --> ")
+    except:
+        print(line)
+        return
     content = [''.join(line[2:])]
     beginTime = time(begin)
     endTime = time(end)
@@ -220,6 +224,7 @@ def srt2ass(input_file, en=False):
     encoding = src[1]
     src = ''
     utf8bom = ''
+    delete_flag = ''
 
     # if not re.search(r'[\u4e00-\u9fa5]', tmp):
     #    en = True
@@ -236,6 +241,9 @@ def srt2ass(input_file, en=False):
     output_file = '.'.join(input_file.split('.')[:-1])
     output_file += '.ass'
     output_file = re.sub(r'_track[\s\S]*]', '', output_file)
+    if '_merge' in output_file:
+        delete_flag = output_file
+        output_file = re.sub(r'_merge', '', output_file)
 
     for ln in range(len(lines)):
         line = lines[ln]
@@ -293,6 +301,9 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
 
     output_str = utf8bom + head_str + '\n' + subLines
     output_str = output_str.encode(encoding)
+
+    if delete_flag:
+        removeFile(delete_flag)
 
     with open(output_file, 'wb') as output:
         output.write(output_str)
@@ -429,12 +440,10 @@ def mergeFilelist(filelist):
         if(not file1):
             file1 = file
             output_file = re.sub(r'_track[\s\S]*]', '', file1)
+            output_file = re.sub('.srt', '_merge.srt', file1)
             continue
         else:
-            if('ch' in file1 or 'en' in file):
-                merge2srts([file1, file], output_file)
-            else:
-                merge2srts([file, file1], output_file)
+            merge2srts([file, file1], output_file)
             outFilelist.append(output_file)
             file1 = ''
     if(Args.delete):

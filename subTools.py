@@ -11,11 +11,19 @@ import opencc
 # srt2ass config
 
 # Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-STR_CH_STYLE = '''Style: Default,Droid Sans Fallback,23,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,88,100,0,0,1,0.2,2,2,10,10,10,1
-Style: Eng,Verdana,12,&H003CA8DC,&H000000FF,&H00000000,&H00000000,-1,0,0,0,90,100,0,0,1,0.1,2,2,10,10,10,1'''
+# 旧的样式
+#STR_CH_STYLE = '''Style: Default,Droid Sans Fallback,23,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,88,100,0,0,1,0.2,2,2,10,10,10,1
+#Style: Eng,Verdana,12,&H003CA8DC,&H000000FF,&H00000000,&H00000000,-1,0,0,0,90,100,0,0,1,0.1,2,2,10,10,10,1
+#Style: Jp,MingLiU-ExtB,16,&H003CA8DC,&H000000FF,&H00000000,&H00000000,-1,0,0,0,88,100,0,0,1,0.1,2,2,10,10,10,1'''
+STR_CH_STYLE = '''Style: Default,MingLiU-ExtB,20,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,85,100,0,0,1,0.2,2,2,10,10,10,1
+Style: Eng,Verdana,12,&H003CA8DC,&H000000FF,&H00000000,&H00000000,-1,0,0,0,90,100,0,0,1,0.1,2,2,10,10,10,1
+Style: Jp,GenYoMin JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0.1,2,2,10,10,10,1'''
+
 STR_EN_STYLE = 'Style: Default,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.3,3,2,10,10,20,1'
-#STR_UNDER_ENG_STYLE = '{\\fsp0\\fnVerdana\\fs12\\1c&H003CA8DC}'
-STR_UNDER_ENG_STYLE = '{\\rEng}'
+STR_JP_STYLE = 'Style: jp,GenYoMin JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0.1,2,2,10,10,10,1'
+
+STR_UNDER_EN_STYLE = '{\\rEng}'
+STR_UNDER_JP_STYLE = '{\\rJp}'
 
 # merge srt config
 
@@ -226,6 +234,9 @@ def srt2ass(input_file, en=False):
     utf8bom = ''
     delete_flag = ''
 
+    STR_UNDER_STYLE = STR_UNDER_EN_STYLE
+    if re.search(r'[\u0800-\u4e00]',tmp):
+        STR_UNDER_STYLE = STR_UNDER_JP_STYLE
     # if not re.search(r'[\u4e00-\u9fa5]', tmp):
     #    en = True
 
@@ -239,11 +250,12 @@ def srt2ass(input_file, en=False):
     tmpLines = ''
     lineCount = 0
     output_file = '.'.join(input_file.split('.')[:-1])
+    if '_merge' in input_file:
+        delete_flag = output_file
+        delete_flag += '.srt'
+        output_file = re.sub(r'_merge', '', output_file)
     output_file += '.ass'
     output_file = re.sub(r'_track[\s\S]*]', '', output_file)
-    if '_merge' in output_file:
-        delete_flag = output_file
-        output_file = re.sub(r'_merge', '', output_file)
 
     for ln in range(len(lines)):
         line = lines[ln]
@@ -264,7 +276,7 @@ def srt2ass(input_file, en=False):
                     if en:
                         tmpLines += '\\N' + line
                     else:
-                        tmpLines += '\\N' + STR_UNDER_ENG_STYLE + line
+                        tmpLines += '\\N' + STR_UNDER_STYLE + line
             lineCount += 1
         ln += 1
 
@@ -413,7 +425,7 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 '''+STR_CH_STYLE+'''
 [Events]
 Format:''', tmp)
-            sytlestr = STR_UNDER_ENG_STYLE.replace('\\', '\\\\')
+            sytlestr = STR_UNDER_EN_STYLE.replace('\\', '\\\\')
             output_str = re.sub('{\r}', '',  output_str)
             output_str = re.sub(r'N\{(.*)\}', 'N'+sytlestr,  output_str)  # 英文行
             output_str = re.sub(r'Dialogue:(.*),.*,,0,0,0,,',

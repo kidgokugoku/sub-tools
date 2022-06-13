@@ -6,18 +6,19 @@ import re
 from collections import namedtuple
 from glob import glob
 
+import chardet
 import opencc
 
 # srt2ass config
 
 # Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 # 旧的样式
-#STR_CH_STYLE = '''Style: Default,Droid Sans Fallback,23,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,88,100,0,0,1,0.2,2,2,10,10,10,1
-#Style: Eng,Verdana,12,&H003CA8DC,&H000000FF,&H00000000,&H00000000,-1,0,0,0,90,100,0,0,1,0.1,2,2,10,10,10,1
-#Style: Jp,MingLiU-ExtB,16,&H003CA8DC,&H000000FF,&H00000000,&H00000000,-1,0,0,0,88,100,0,0,1,0.1,2,2,10,10,10,1'''
-STR_CH_STYLE = '''Style: Default,MingLiU-ExtB,20,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,85,100,0,0,1,0.2,2,2,10,10,10,1
-Style: Eng,Verdana,12,&H003CA8DC,&H000000FF,&H00000000,&H00000000,-1,0,0,0,90,100,0,0,1,0.1,2,2,10,10,10,1
-Style: Jp,GenYoMin JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0.1,2,2,10,10,10,1'''
+# STR_CH_STYLE = '''Style: Default,Droid Sans Fallback,23,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,88,100,0,0,1,0.2,2,2,10,10,10,1
+# Style: Eng,Verdana,12,&H003CA8DC,&H000000FF,&H00000000,&H00000000,-1,0,0,0,90,100,0,0,1,0.1,2,2,10,10,10,1
+# Style: Jp,MingLiU-ExtB,16,&H003CA8DC,&H000000FF,&H00000000,&H00000000,-1,0,0,0,88,100,0,0,1,0.1,2,2,10,10,10,1'''
+STR_CH_STYLE = '''Style: Default,思源宋体 CN SemiBold,28,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0,0,1,1,3,2,10,10,10,1
+Style: Eng,GenYoMin TW M,12,&H003CA8DC,&H000000FF,&H00000000,&H00000000,-1,0,0,0,90,100,0,0,1,1,2,2,10,10,10,1
+Style: Jp,GenYoMin JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,2,2,10,10,10,1'''
 
 STR_EN_STYLE = 'Style: Default,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.3,3,2,10,10,20,1'
 STR_JP_STYLE = 'Style: jp,GenYoMin JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0.1,2,2,10,10,10,1'
@@ -37,17 +38,13 @@ timeShift = 1000  # ms
 
 
 def fileopen(input_file):
-    encodings = ["utf-32", "utf-16", "utf-8",
-                 "cp1252", "gb2312", "gbk", "big5"]
+    with open(input_file, mode="rb") as f:
+        enc = chardet.detect(f.read())['encoding']
+    if enc == 'GB2312':
+        enc = 'gbk'
     tmp = ''
-    for enc in encodings:
-        try:
-            with codecs.open(input_file, mode="r", encoding=enc) as fd:
-                tmp = fd.read()
-                break
-        except:
-            # print enc + ' failed'
-            continue
+    with open(input_file, mode="r", encoding=enc) as fd:
+        tmp = fd.read()
     return [tmp, enc]
 
 
@@ -235,8 +232,11 @@ def srt2ass(input_file, en=False):
     delete_flag = ''
 
     STR_UNDER_STYLE = STR_UNDER_EN_STYLE
-    if re.search(r'[\u0800-\u4e00]',tmp):
-        STR_UNDER_STYLE = STR_UNDER_JP_STYLE
+    # if  re.search(r'[\u0800-\u4e00]',tmp):
+    #    STR_UNDER_STYLE = STR_UNDER_JP_STYLE
+
+#   todo: 根据语言直接用参数设置
+
     # if not re.search(r'[\u4e00-\u9fa5]', tmp):
     #    en = True
 
@@ -312,7 +312,7 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text'''
 
     output_str = utf8bom + head_str + '\n' + subLines
-    output_str = output_str.encode(encoding)
+    output_str = output_str.encode('utf-8')
 
     if delete_flag:
         removeFile(delete_flag)
@@ -418,18 +418,19 @@ def updateAssStyle(filelist):
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 '''+STR_EN_STYLE+'''
 [Events]
-Format:''', tmp)
+Format:''', tmp, 1)
         else:
             output_str = re.sub(r'(Styles])?[\s\S]*Format:', '''[V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 '''+STR_CH_STYLE+'''
 [Events]
-Format:''', tmp)
+Format:''', tmp, 1)
             sytlestr = STR_UNDER_EN_STYLE.replace('\\', '\\\\')
-            output_str = re.sub('{\r}', '',  output_str)
-            output_str = re.sub(r'N\{(.*)\}', 'N'+sytlestr,  output_str)  # 英文行
-            output_str = re.sub(r'Dialogue:(.*),.*,,0,0,0,,',
-                                r'Dialogue:\1,Default,,0,0,0,,', output_str)  # 默认字体
+            output_str = re.sub(r'\{\\r\}', '',  output_str)
+            output_str = re.sub(r'N\{(.*)\}(\S)', 'N' +
+                                sytlestr+r'\2',  output_str)  # 英文行
+            output_str = re.sub(r'Dialogue:(.*),.*,.*,(.*,[0-9]*,[0-9]*,[0-9]*),',
+                                r'Dialogue:\1,Default,,\2,', output_str)  # 默认字体
 
         output_str += utf8bom
         output_str = output_str.encode(encoding)

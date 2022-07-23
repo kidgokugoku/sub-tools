@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 import argparse
-import codecs
 import os
 import re
 from collections import namedtuple
 from glob import glob
-
 import chardet
 import opencc
-
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pymkv import MKVFile, MKVTrack
 # srt2ass config
 
 # Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
@@ -33,6 +32,7 @@ subEx = namedtuple("sub", "begin, end, content")
 
 utf8bom = ''
 enc = ''
+duo = False
 inputcontent = []
 timeShift = 1000  # ms
 
@@ -43,7 +43,7 @@ def fileopen(input_file):
     if enc == 'GB2312':
         enc = 'gbk'
     tmp = ''
-    with open(input_file, mode="r", encoding=enc) as fd:
+    with open(input_file, mode="r", encoding=enc, errors='ignore') as fd:
         tmp = fd.read()
     return [tmp, enc]
 
@@ -213,6 +213,7 @@ def timeMerge(c1, c2):
 
 
 def srt2ass(input_file, en=False):
+    global duo
 
     if not '.srt' in input_file:
         print('input is not .srt file')
@@ -226,19 +227,11 @@ def srt2ass(input_file, en=False):
 
     src = fileopen(input_file)
     tmp = src[0]
-    encoding = src[1]
     src = ''
     utf8bom = ''
     delete_flag = ''
 
     STR_UNDER_STYLE = STR_UNDER_EN_STYLE
-    # if  re.search(r'[\u0800-\u4e00]',tmp):
-    #    STR_UNDER_STYLE = STR_UNDER_JP_STYLE
-
-#   todo: 根据语言直接用参数设置
-
-    # if not re.search(r'[\u4e00-\u9fa5]', tmp):
-    #    en = True
 
     if u'\ufeff' in tmp:
         tmp = tmp.replace(u'\ufeff', '')
@@ -273,10 +266,10 @@ def srt2ass(input_file, en=False):
                 if lineCount < 2:
                     tmpLines += line
                 else:
-                    if en:
-                        tmpLines += '\\N' + line
-                    else:
+                    if duo:
                         tmpLines += '\\N' + STR_UNDER_STYLE + line
+                    else:
+                        tmpLines += '\\N' + line
             lineCount += 1
         ln += 1
 
@@ -314,6 +307,8 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
     output_str = utf8bom + head_str + '\n' + subLines
     output_str = output_str.encode('utf-8')
 
+    if Args.delete:
+        delete_flag = input_file
     if delete_flag:
         removeFile(delete_flag)
 
@@ -329,11 +324,14 @@ def loadArgs():
                         help='srt file location, default all .srt files in current folder',
                         nargs='*',
                         default='.')
-    parser.add_argument("-e", "--english", "-en",
+    parser.add_argument("--english", "-en",
                         help="handle only ENG subtitles",
                         action='store_true')
-    parser.add_argument("-d", "--delete",
+    parser.add_argument("--delete",
                         help="delete the original .srt file",
+                        action='store_true')
+    parser.add_argument("-d", "--duo",
+                        help=".srt file contain two language",
                         action='store_true')
     parser.add_argument('-a', "--all-dir",
                         help="process all .srt/.ass in child dir",
@@ -345,6 +343,9 @@ def loadArgs():
                        action='store_true')
     group.add_argument('-m', "--merge-srt",
                        help="merge srts ",
+                       action='store_true')
+    group.add_argument('-e', "--extract-sub",
+                       help="extract subtitles from .mkv",
                        action='store_true')
     group.add_argument('--extract-srt',
                        help="extract srt ",
@@ -374,27 +375,34 @@ def getFilelist():
                     for filename in files:
                         filelist.append(os.path.join(home, filename))
         elif os.path.isdir(arg):
-            filelist += glob(os.path.join(arg, '*.srt'))
-            filelist += glob(os.path.join(arg, '*.ass'))
-
-    filelist = list(filter(lambda x: os.path.isfile(x), filelist))
-    if not Args.update_ass:
-        filelist = list(filter(lambda x: '.srt' in x, filelist))
-    else:
-        filelist = list(filter(lambda x: '.ass' in x, filelist))
-
+            
+            if Args.update_ass:
+                filelist += glob(os.path.join(arg, '*.ass'))
+            elif Args.extract_sub:
+                filelist += glob(os.path.join(arg, '*.mkv'))
+            else:
+                filelist += glob(os.path.join(arg, '*.srt'))
     print(filelist)
     return filelist
 
 
 def srt2assAll(filelist):
+    # for arg in filelist:
+    #    srt2ass(arg, Args.english)
+    # return
+    with ThreadPoolExecutor(max_workers=17) as executor:
+        return executor.map(srt2ass, filelist, timeout=15)
 
-    for arg in filelist:
-        srt2ass(arg, Args.english)
-        if Args.delete:
-            removeFile(arg)
-    return
 
+def updateAssAll(filelist):
+    with ThreadPoolExecutor(max_workers=17) as executor:
+        return executor.map(updateAssStyle, filelist, timeout=15)
+
+
+def extractSubAll(filelist):
+    with ThreadPoolExecutor(max_workers=17) as executor:
+        return executor.map(extractSub, filelist, timeout=15)
+       
 
 def updateAssStyle(filelist):
 
@@ -471,7 +479,25 @@ def removeFile(file):
     print('deleted: '+file)
 
 
+def extractSub(file):
+    print(file)
+    mkv = MKVFile(file)
+    tracks = mkv.get_track()
+    for track in tracks:
+        if track._track_type == 'subtitles':
+            if 'SRT' in track._track_codec:
+                if track._language == 'eng' or track._language == 'chi' or track._language == 'zh' or track._language == 'zho':
+                    dst_srt_path = file.replace(
+                        '.mkv', '_track'+str(track._track_id)+'_'+track._language+'.srt')
+                    print(track)
+                    os.system('mkvextract {} tracks {}:{}\n'.format(
+                        file, track._track_id, dst_srt_path))
+    return
+
+
 def main():
+    global duo
+
     loadArgs()
     print(Args)
 
@@ -480,11 +506,16 @@ def main():
     if Args.extract_srt:
         extractSrt(filelist[0])
     elif Args.update_ass:
-        updateAssStyle(filelist)
+        updateAssAll(filelist)
+    elif Args.extract_sub:
+        extractSubAll(filelist)
     elif Args.merge_srt:
         mergedFiles = mergeFilelist(filelist)
+        duo = True
         srt2assAll(mergedFiles)
     else:
+        if Args.duo:
+            duo = True
         srt2assAll(filelist)
     return
 

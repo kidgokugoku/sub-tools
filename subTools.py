@@ -11,32 +11,41 @@ import opencc
 from pymkv import MKVFile, MKVTrack
 
 
-
 # ASS/SSA style config
 
 # Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-STR_CH_STYLE = '''Style: Default,思源宋体 CN SemiBold,28,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0,0,1,1,3,2,10,10,10,1
-Style: Eng,GenYoMin TW M,12,&H003CA8DC,&H000000FF,&H00000000,&H00000000,-1,0,0,0,90,100,0,0,1,1,2,2,10,10,10,1
-Style: Jp,GenYoMin JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,2,2,10,10,10,1'''
+STR_DEFAULT_STYLE = '''Style: Default,思源宋体 CN SemiBold,28,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0,0,1,1,3,2,10,10,10,1
+Style: EN,GenYoMin TW M,12,&H003CA8DC,&H000000FF,&H00000000,&H00000000,-1,0,0,0,90,100,0,0,1,1,2,2,10,10,10,1
+Style: JP,GenYoMin JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,2,2,10,10,10,1'''
 
+STR_CN_STYLE = 'Style: Default,思源宋体 CN SemiBold,28,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0,0,1,1,3,2,10,10,10,1'
 STR_EN_STYLE = 'Style: Default,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.3,3,2,10,10,20,1'
-STR_JP_STYLE = 'Style: jp,GenYoMin JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0.1,2,2,10,10,10,1'
+STR_JP_STYLE = 'Style: Default,GenYoMin JP B,23,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0.1,2,2,10,10,10,1'
 
-STR_UNDER_EN_STYLE = '{\\rEng}'
-STR_UNDER_JP_STYLE = '{\\rJp}'
+STR_2nd_EN_STYLE = '{\\rEN}'
+STR_2nd_JP_STYLE = '{\\rJP}'
 
+STR_2nd_STYLE = STR_2nd_EN_STYLE
 
-Args = ''
-utf8bom = ''
-encoding = ''
+ARGS = ''
+
 # merge srt config
-
+INT_TIMESHIFT = 1000
+# iso639 code list for the language you need to extract from MKV file
+LIST_EXTRACT_LANGUAGE_ISO639=[
+#    'en',
+    'zh',
+#    'eng',
+    'zho',
+    'chi',
+    ]
 
 class MergeFile:
-    file = []
+    file1 = ''
+    file2 = ''
     sub = namedtuple("sub", "begin, end, content,beginTime,endTime")
     subEx = namedtuple("sub", "begin, end, content")
-    timeShift = 1000  # ms
+    timeShift = INT_TIMESHIFT  # ms
     __encoding = ''
 
     def __init__(self, file1, file2) -> None:
@@ -52,7 +61,7 @@ class MergeFile:
             print(f"merging: {f}")
             line = []
 
-            src = fileopen(f)
+            src = fileOpen(f)
             tmp = src[0]
             if not self.__encoding:
                 self.__encoding = 'utf-8'
@@ -89,7 +98,7 @@ class MergeFile:
         return
 
     def __saveMergedSubFile(self, raw, f):
-        output = utf8bom
+        output = UTF8BOM
         for i in range(len(raw)):
             output += ("%d\r\n" % (i+1))
             output += ("%s --> %s \r\n" % (raw[i].begin, raw[i].end))
@@ -161,34 +170,31 @@ class MergeFile:
         return mergedContent
 
 
-def fileopen(input_file):
+def fileOpen(input_file):
     with open(input_file, mode="rb") as f:
         enc = chardet.detect(f.read())['encoding']
-    if enc == 'GB2312':
-        enc = 'gbk'
     tmp = ''
     with open(input_file, mode="r", encoding=enc, errors='ignore') as fd:
         tmp = fd.read()
     return [tmp, enc]
 
 
-def merge2srt(filelist):
+def merge2srt(inputfilelist):
     output_filelist = []
-    it = iter(filelist)
+    it = iter(inputfilelist)
     for file in it:
         mergeFile = MergeFile(file, next(it))
         output_file = re.sub(r'_track[0-9]+?|\.(en|ch)', '', file)
         output_file = re.sub('.srt', '_merge.srt', file)
         mergeFile.saveTo(output_file)
         output_filelist.append(output_file)
-    if(Args.delete):
-        removeFile(filelist)
-    Args.duo = True
-    srt2assAll(output_filelist)
+    if(ARGS.delete):
+        removeFile(inputfilelist)
+    ARGS.bilingual = True
+    srt2ass(output_filelist)
 
 
 def srt2ass(input_file, isEn=False):
-
     if type(input_file) is list:
         with ThreadPoolExecutor(max_workers=17) as executor:
             return executor.map(srt2ass, input_file, timeout=15)
@@ -199,7 +205,7 @@ def srt2ass(input_file, isEn=False):
 
     print(f"processing srt2ass: {input_file}")
 
-    src = fileopen(input_file)
+    src = fileOpen(input_file)
     tmpText = src[0]
     utf8bom = ''
 
@@ -209,13 +215,12 @@ def srt2ass(input_file, isEn=False):
 
     tmpText = tmpText.replace("\r", "")
     lines = [x.strip() for x in tmpText.split("\n") if x.strip()]
-    output_file = '.'.join(input_file.split('.')[:-1]) + '.ass'
-    output_file = re.sub(r'(_track[\s\S]*?|_merge)\.', '.', output_file)
-
-    STR_UNDER_STYLE = STR_UNDER_EN_STYLE
+    tmpText = ''
     lineCount = 0
     subLines = ''
     tmpLines = ''
+    STR_2nd_STYLE = STR_2nd_STYLE if ARGS.bilingual else ''
+
     for index in range(len(lines)):
         line = lines[index]
         if line.isdigit() and re.match('-?\d+:\d\d:\d\d', lines[(index+1)]):
@@ -224,22 +229,17 @@ def srt2ass(input_file, isEn=False):
             tmpLines = ''
             lineCount = 0
             continue
+        elif re.match('-?\d+:\d\d:\d\d', line):
+            line = line.replace('-0', '0')
+            tmpLines += f'Dialogue: 0,{line},Default,,0,0,0,,'
+        elif lineCount < 2:
+            tmpLines += line
         else:
-            if re.match('-?\d+:\d\d:\d\d', line):
-                line = line.replace('-0', '0')
-                tmpLines += 'Dialogue: 0,' + line + ',Default,,0,0,0,,'
-            else:
-                if lineCount < 2:
-                    tmpLines += line
-                else:
-                    if Args.duo:
-                        tmpLines += '\\N' + STR_UNDER_STYLE + line
-                    else:
-                        tmpLines += '\\N' + line
-            lineCount += 1
+            tmpLines += '\\N' + STR_2nd_STYLE + line
+        lineCount += 1
     subLines += tmpLines + "\r\n"
-
-    subLines = re.sub(r'\d*(\d:\d{2}:\d{2}),(\d{2})\d', '\\1.\\2', subLines)
+    # timestamp replace
+    subLines = re.sub(r'\d*(\d:\d{2}:\d{2}),(\d{2})\d', r'\1.\2', subLines)
     subLines = re.sub(r'\s+-->\s+', ',', subLines)
     # replace style
     subLines = re.sub(r'<([ubi])>', "{\\\\\g<1>1}", subLines)
@@ -251,7 +251,7 @@ def srt2ass(input_file, isEn=False):
     # converter = opencc.OpenCC('s2hk.json')  # 将简中转换成繁中
     # subLines = converter.convert(subLines)
 
-    STR_STYLE = STR_EN_STYLE if Args.english or isEn else STR_CH_STYLE
+    STR_STYLE = STR_EN_STYLE if ARGS.english or isEn else STR_DEFAULT_STYLE
     head_str = f'''[Script Info]
 This is an Advanced Sub Station Alpha v4+ script generated by subTools.py.
 ScriptType: v4.00+
@@ -264,22 +264,22 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
     output_str = utf8bom + head_str + '\n' + subLines
     output_str = output_str.encode('utf-8')
 
-    if Args.delete or '_merge' in input_file:
-        removeFile(input_file)
-
+    output_file = '.'.join(input_file.split('.')[:-1]) + '.ass'
+    output_file = re.sub(r'(_track[\s\S]*?|_merge)\.', '.', output_file)
     with open(output_file, 'wb') as output:
         output.write(output_str)
 
+    if ARGS.delete or '_merge' in input_file:
+        removeFile(input_file)
     return
 
 
-def extractSubFromMKV(filelist):
-    for file in filelist:
-        track_cnt = 0
+def extractSubFromMKV(input_filelist):
+    for file in input_filelist:
         mkv = MKVFile(file)
-        tracks = mkv.get_track()
+        tracks =list(filter(lambda x: x._track_type == 'subtitles', mkv.get_track())) 
         for track in tracks:
-            if not track._track_type == 'subtitles' and 'SubStationAlpha' in str(track._track_codec):
+            if not 'SubStationAlpha' in str(track._track_codec):
                 continue
             dst_srt_path = file.replace(
                 '.mkv', f'_track{str(track._track_id)}_{track._language}.ass')
@@ -288,15 +288,16 @@ def extractSubFromMKV(filelist):
                 f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
             updateAssStyle(dst_srt_path)
             return
-
+        
+        track_cnt = 0
         for track in tracks:
-            if not track._track_type == 'subtitles' and 'SRT' in track._track_codec:
+            if not 'SRT' in track._track_codec:
                 continue
             isEN = track._language == 'eng' and 'SDH' in str(track.track_name)
-            if not isEN or track._language == 'chi' or track._language == 'zh' or track._language == 'zho':
+            if not isEN or track._language in LIST_EXTRACT_LANGUAGE_ISO639:
                 continue
             dst_srt_path = file.replace(
-                '.mkv', '_track'+str(track._track_id)+'_'+track._language+'.srt')
+                '.mkv', f'_track{track._track_id}_{track._language}.srt')
             print(track)
             os.system(
                 f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
@@ -306,16 +307,14 @@ def extractSubFromMKV(filelist):
 
 
 def updateAssStyle(input_file):
-    
     if type(input_file) is list:
         with ThreadPoolExecutor(max_workers=17) as executor:
             return executor.map(updateAssStyle, input_file, timeout=15)
 
     print(f"processing updateAssStyle: {input_file}")
 
-    src = fileopen(input_file)
+    src = fileOpen(input_file)
     output_file = input_file
-    output_file = re.sub(r'_track[\s\S]*]', '', output_file)
     tmp = src[0]
     encoding = src[1]
 
@@ -325,13 +324,13 @@ def updateAssStyle(input_file):
         tmp = tmp.replace(u'\ufeff', '')
         utf8bom = u'\ufeff'
 
-    STR_STYLE = STR_EN_STYLE if Args.english else STR_CH_STYLE
+    STR_STYLE = STR_EN_STYLE if ARGS.english else STR_DEFAULT_STYLE
     output_str = re.sub(r'\[V4(\+)? Styles\][\s\S]*?\[Events\]', f'''generated by subTool.py
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 {STR_STYLE}
 [Events]''', tmp, 1)
-    SECOND_LANG_STYLE = STR_UNDER_EN_STYLE.replace('\\', '\\\\')
+    SECOND_LANG_STYLE = STR_2nd_STYLE.replace('\\', '\\\\')
     output_str = re.sub(r',\{\\fn(.*?)\}', ',',  output_str)
     output_str = re.sub(r'\{\\r\}', '',  output_str)
     output_str = re.sub(r'\\N\{.*?\}',
@@ -342,13 +341,8 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
     output_str += utf8bom
     output_str = output_str.encode(encoding)
 
-    with open(output_file+'.bak', 'wb') as output:
+    with open(output_file, 'wb') as output:
         output.write(output_str)
-    if os.path.isfile(output_file):
-        os.remove(output_file)
-    if Args.delete:
-        removeFile(input_file)
-    os.rename(f"{output_file}.bak", output_file)
     return
 
 
@@ -360,6 +354,7 @@ def removeFile(filelist):
     else:
         os.remove(filelist)
         print(f'deleted: {filelist}')
+    return
 
 
 def loadArgs():
@@ -369,16 +364,16 @@ def loadArgs():
                         nargs='*',
                         default='.')
     parser.add_argument("--english", "-en",
-                        help="handle only ENG subtitles",
+                        help="handle file that contian only ENG subtitles",
                         action='store_true')
-    parser.add_argument("--delete",
+    parser.add_argument("-d", "--delete",
                         help="delete the original .srt file",
                         action='store_true')
-    parser.add_argument("-d", "--duo",
-                        help=".srt file contain two language",
+    parser.add_argument("-b", "--bilingual",
+                        help="handle files that contain two language",
                         action='store_true')
     parser.add_argument("-a", "--all-dir",
-                        help="process all .srt/.ass in child dir",
+                        help="process all .srt/.ass including all children dir",
                         action='store_true')
     group = parser.add_mutually_exclusive_group()
 
@@ -391,13 +386,13 @@ def loadArgs():
     group.add_argument('-e', "--extract-sub",
                        help="extract subtitles from .mkv",
                        action='store_true')
-    global Args
-    Args = parser.parse_args()
-    print(Args)
+    global ARGS
+    ARGS = parser.parse_args()
+    print(ARGS)
 
 
 def getFilelist():
-    file = Args.file
+    file = ARGS.file
 
     filelist = []
 
@@ -407,13 +402,13 @@ def getFilelist():
         filelist.append(file)
 
     for arg in filelist:
-        if Args.all_dir and os.path.isdir(arg):
+        if ARGS.all_dir and os.path.isdir(arg):
             for home, dirs, files in os.walk(arg):
                 for dir in dirs:
                     filelist.append(os.path.join(home, dir))
-        if Args.update_ass:
+        if ARGS.update_ass:
             filelist += glob(os.path.join(arg, '*.ass'))
-        elif Args.extract_sub:
+        elif ARGS.extract_sub:
             filelist += glob(os.path.join(arg, '*.mkv'))
         else:
             filelist += glob(os.path.join(arg, '*.srt'))
@@ -423,16 +418,14 @@ def getFilelist():
 
 
 def main():
-    global Args
     loadArgs()
 
     filelist = getFilelist()
-
-    if Args.update_ass:
+    if ARGS.update_ass:
         updateAssStyle(filelist)
-    elif Args.extract_sub:
+    elif ARGS.extract_sub:
         extractSubFromMKV(filelist)
-    elif Args.merge_srt:
+    elif ARGS.merge_srt:
         merge2srt(filelist)
     else:
         srt2ass(filelist)

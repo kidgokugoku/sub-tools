@@ -10,7 +10,9 @@ import chardet
 import opencc
 from pymkv import MKVFile, MKVTrack
 
-# srt2ass config
+
+
+# ASS/SSA style config
 
 # Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 STR_CH_STYLE = '''Style: Default,思源宋体 CN SemiBold,28,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0,0,1,1,3,2,10,10,10,1
@@ -23,14 +25,140 @@ STR_JP_STYLE = 'Style: jp,GenYoMin JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00
 STR_UNDER_EN_STYLE = '{\\rEng}'
 STR_UNDER_JP_STYLE = '{\\rJp}'
 
-# merge srt config
 
-sub = namedtuple("sub", "begin, end, content,beginTime,endTime")
-subEx = namedtuple("sub", "begin, end, content")
 Args = ''
 utf8bom = ''
 encoding = ''
-timeShift = 1000  # ms
+# merge srt config
+
+
+class MergeFile:
+    file = []
+    sub = namedtuple("sub", "begin, end, content,beginTime,endTime")
+    subEx = namedtuple("sub", "begin, end, content")
+    timeShift = 1000  # ms
+    __encoding = ''
+
+    def __init__(self, file1, file2) -> None:
+        self.file1 = file1
+        self.file2 = file2
+
+    def saveTo(self, outputfile):
+        content1 = []
+        content = []
+        is_CHI_first_sub = 0
+        inputfile = [self.file1, self.file2]
+        for f in inputfile:
+            print(f"merging: {f}")
+            line = []
+
+            src = fileopen(f)
+            tmp = src[0]
+            if not self.__encoding:
+                self.__encoding = 'utf-8'
+            src = ''
+            if u'\ufeff' in tmp:
+                tmp = tmp.replace(u'\ufeff', '')
+                self.__encoding = 'utf-8'
+            is_CHI_first_sub = re.search(r'[\u4e00-\u9fa5]', tmp)
+            tmp = tmp.replace("\r", "")
+            lines = [x.strip() for x in tmp.split("\n") if x.strip()]
+            tmp = ''
+
+            for l in lines:
+                if(re.sub(r'[0-9]+', '', l) == ''):
+                    if(not len(line)):
+                        line = [l]
+                    else:
+                        content.append(self.__process(line))
+                        line = [l]
+                else:
+                    if(len(line)):
+                        line.append(l)
+            content.append(self.__process(line))
+            if(not len(content1)):
+                content1 = content
+                content = []
+
+        if not is_CHI_first_sub:
+            outputraw = self.__timeMerge(content1, content)
+        else:
+            outputraw = self.__timeMerge(content, content1)
+
+        self.__saveMergedSubFile(outputraw, outputfile)
+        return
+
+    def __saveMergedSubFile(self, raw, f):
+        output = utf8bom
+        for i in range(len(raw)):
+            output += ("%d\r\n" % (i+1))
+            output += ("%s --> %s \r\n" % (raw[i].begin, raw[i].end))
+            if type(raw[i].content) == list:
+                for c in raw[i].content:
+                    output += ("%s" % c)
+                    output += ("\r\n")
+            else:
+                output += ("%s" % raw[i].content)
+                output += ("\r\n")
+        output = output.encode(self.__encoding)
+        with open(f, 'wb') as output_file:
+            output_file.write(output)
+        return
+
+    def __time(self, rawtime):
+        (hour, minute, seconds) = rawtime.strip().split(":")
+        (second, milisecond) = seconds.strip().split(",")
+        return int(milisecond) + 1000 * int(second) + 1000 * 60 * int(minute) + 1000 * 60 * 60 * int(hour)
+
+    def __process(self, line):
+        try:
+            (begin, end) = line[1].strip().split(" --> ")
+        except:
+            print(f"spliting error:{line}")
+            return
+        content = [' '.join(line[2:])]
+        beginTime = self.__time(begin)
+        endTime = self.__time(end)
+        return self.sub(begin, end, content, beginTime, endTime)
+
+    def __processEx(self, line):
+        (begin, end) = line[1].strip().split(" --> ")
+        content1 = line[2]
+        content2 = ''
+        if len(line)-3:
+            content2 = line[3]
+        return [self.subEx(begin, end, content1), self.subEx(begin, end, content2)]
+
+    def __timeMerge(self, c1, c2):
+        lockType = index1 = index2 = 0
+        capTime1 = capTime2 = 0
+        mergedContent = []
+        while(index1 < len(c1) or index2 < len(c2)):
+            captmp = ''
+            if((not lockType == 1) and index1 < len(c1)):
+                capTime1 = c1[index1].beginTime
+            if((not lockType == 2) and index2 < len(c2)):
+                capTime2 = c2[index2].beginTime
+            lockType = 0
+            if(capTime1 > capTime2 and capTime1 > capTime2+timeShift and index2 < len(c2) or index1 == len(c1)):
+                lockType = 1
+            if(capTime2 > capTime1 and capTime2 > capTime1+timeShift and index1 < len(c1) or index2 == len(c2)):
+                lockType = 2
+
+            if(not lockType == 1):
+                captmp = c1[index1]
+                index1 += 1
+                if(lockType == 2):
+                    mergedContent.append(captmp)
+
+            if(not lockType == 2):
+                if(captmp == ''):
+                    captmp = c2[index2]
+                else:
+                    captmp.content.append(c2[index2].content[0])
+                mergedContent.append(captmp)
+                index2 += 1
+        return mergedContent
 
 
 def fileopen(input_file):
@@ -44,185 +172,27 @@ def fileopen(input_file):
     return [tmp, enc]
 
 
-def process(line):
-    try:
-        (begin, end) = line[1].strip().split(" --> ")
-    except:
-        print(f"spliting error:{line}")
-        return
-    content = [' '.join(line[2:])]
-    beginTime = time(begin)
-    endTime = time(end)
-    return sub(begin, end, content, beginTime, endTime)
-
-
-def processEx(line):
-    (begin, end) = line[1].strip().split(" --> ")
-    content1 = line[2]
-    content2 = ''
-    if len(line)-3:
-        content2 = line[3]
-    return [subEx(begin, end, content1), subEx(begin, end, content2)]
-
-
-def mergeFilelist(filelist):
-    file1 = ''
+def merge2srt(filelist):
     output_filelist = []
-    for file in filelist:
-        if(not file1):
-            file1 = file
-            output_file = re.sub(r'_track[\s\S]*]', '', file1)
-            output_file = re.sub('.srt', '_merge.srt', file1)
-            continue
-        else:
-            merge2srts([file, file1], output_file)
-            output_filelist.append(output_file)
-            file1 = ''
+    it = iter(filelist)
+    for file in it:
+        mergeFile = MergeFile(file, next(it))
+        output_file = re.sub(r'_track[0-9]+?|\.(en|ch)', '', file)
+        output_file = re.sub('.srt', '_merge.srt', file)
+        mergeFile.saveTo(output_file)
+        output_filelist.append(output_file)
     if(Args.delete):
         removeFile(filelist)
     Args.duo = True
     srt2assAll(output_filelist)
 
 
-def time(rawtime):
-    (hour, minute, seconds) = rawtime.strip().split(":")
-    (second, milisecond) = seconds.strip().split(",")
-    return int(milisecond) + 1000 * int(second) + 1000 * 60 * int(minute) + 1000 * 60 * 60 * int(hour)
-
-
-def saveMergedSubFile(raw, f, enc='utf-8'):
-    output = utf8bom
-    for i in range(len(raw)):
-        output += ("%d\r\n" % (i+1))
-        output += ("%s --> %s \r\n" % (raw[i].begin, raw[i].end))
-        if type(raw[i].content) == list:
-            for c in raw[i].content:
-                output += ("%s" % c)
-                output += ("\r\n")
-        else:
-            output += ("%s" % raw[i].content)
-            output += ("\r\n")
-    output = output.encode(enc)
-    with open(f, 'wb') as output_file:
-        output_file.write(output)
-    return
-
-
-def merge2srts(inputfile, outputfile):
-    content1 = []
-    content = []
-    is_CHI_first_sub = 0
-    for f in inputfile:
-        print(f"merging: {f}")
-        line = []
-        global encoding
-        global utf8bom
-
-        src = fileopen(f)
-        tmp = src[0]
-        if not encoding:
-            encoding = src[1]
-        src = ''
-        if u'\ufeff' in tmp:
-            tmp = tmp.replace(u'\ufeff', '')
-            utf8bom = u'\ufeff'
-            encoding = 'utf-8'
-        is_CHI_first_sub = re.search(r'[\u4e00-\u9fa5]', tmp)
-        tmp = tmp.replace("\r", "")
-        lines = [x.strip() for x in tmp.split("\n") if x.strip()]
-        tmp = ''
-
-        for l in lines:
-            if(re.sub(r'[0-9]+', '', l) == ''):
-                if(not len(line)):
-                    line = [l]
-                else:
-                    content.append(process(line))
-                    line = [l]
-            else:
-                if(len(line)):
-                    line.append(l)
-        content.append(process(line))
-        if(not len(content1)):
-            content1 = content
-            content = []
-
-    if not is_CHI_first_sub:
-        outputraw = timeMerge(content1, content)
-    else:
-        outputraw = timeMerge(content, content1)
-
-    saveMergedSubFile(outputraw, outputfile, encoding)
-    return
-
-
-def extractSrtFromAssFile(inputfile):
-    print(f"extracting: {inputfile}")
-    content1 = []
-    content2 = []
-    line = []
-    global encoding
-    global utf8bom
-
-    src = fileopen(inputfile)
-    tmp = src[0]
-    encoding = src[1]
-    src = ''
-    if u'\ufeff' in tmp:
-        tmp = tmp.replace(u'\ufeff', '')
-        utf8bom = u'\ufeff'
-
-    tmp = tmp.replace("\r", "")
-    lines = [x.strip() for x in tmp.split("\n") if x.strip()]
-    tmp = ''
-
-    for l in lines:
-        if(re.sub(r'[0-9]+', '', l) == ''):
-            if(not len(line)):
-                line = [l]
-            else:
-                content1.append(processEx(line)[0])
-                content2.append(processEx(line)[1])
-                line = [l]
-        else:
-            line.append(l)
-    saveMergedSubFile(content1, re.sub('.srt', '_1.srt', inputfile), encoding)
-    saveMergedSubFile(content2, re.sub('.srt', '_2.srt', inputfile), encoding)
-
-
-def timeMerge(c1, c2):
-    lockType = index1 = index2 = 0
-    capTime1 = capTime2 = 0
-    mergedContent = []
-    while(index1 < len(c1) or index2 < len(c2)):
-        captmp = ''
-        if((not lockType == 1) and index1 < len(c1)):
-            capTime1 = c1[index1].beginTime
-        if((not lockType == 2) and index2 < len(c2)):
-            capTime2 = c2[index2].beginTime
-        lockType = 0
-        if(capTime1 > capTime2 and capTime1 > capTime2+timeShift and index2 < len(c2) or index1 == len(c1)):
-            lockType = 1
-        if(capTime2 > capTime1 and capTime2 > capTime1+timeShift and index1 < len(c1) or index2 == len(c2)):
-            lockType = 2
-
-        if(not lockType == 1):
-            captmp = c1[index1]
-            index1 += 1
-            if(lockType == 2):
-                mergedContent.append(captmp)
-
-        if(not lockType == 2):
-            if(captmp == ''):
-                captmp = c2[index2]
-            else:
-                captmp.content.append(c2[index2].content[0])
-            mergedContent.append(captmp)
-            index2 += 1
-    return mergedContent
-
-
 def srt2ass(input_file, isEn=False):
+
+    if type(input_file) is list:
+        with ThreadPoolExecutor(max_workers=17) as executor:
+            return executor.map(srt2ass, input_file, timeout=15)
+
     if not os.path.isfile(input_file):
         print(f"{input_file} not exist")
         return
@@ -303,54 +273,44 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
     return
 
 
-def srt2assAll(filelist):
-    with ThreadPoolExecutor(max_workers=17) as executor:
-        return executor.map(srt2ass, filelist, timeout=15)
-
-
-def updateAssStyleAll(filelist):
-    with ThreadPoolExecutor(max_workers=17) as executor:
-        return executor.map(updateAssStyle, filelist, timeout=15)
-
-
-def extractSub(file):
-    track_cnt = 0
-    mkv = MKVFile(file)
-    tracks = mkv.get_track()
-    for track in tracks:
-        if not track._track_type == 'subtitles' and 'SubStationAlpha' in str(track._track_codec):
-            continue
-        dst_srt_path = file.replace(
-            '.mkv', f'_track{str(track._track_id)}_{track._language}.ass')
-        print(f"mkvextract:{track}")
-        os.system(
-            f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
-        updateAssStyle(dst_srt_path)
-        return
-
-    for track in tracks:
-        if not track._track_type == 'subtitles' and 'SRT' in track._track_codec:
-            continue
-        isEN = track._language == 'eng' and 'SDH' in str(track.track_name)
-        if not isEN or track._language == 'chi' or track._language == 'zh' or track._language == 'zho':
-            continue
-        dst_srt_path = file.replace(
-            '.mkv', '_track'+str(track._track_id)+'_'+track._language+'.srt')
-        print(track)
-        os.system(
-            f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
-        track_cnt += 1
-        if track_cnt == 1:
-            srt2ass(dst_srt_path, isEN)
-
-
-def extractSubAll(filelist):
+def extractSubFromMKV(filelist):
     for file in filelist:
-        extractSub(file)
-    return
+        track_cnt = 0
+        mkv = MKVFile(file)
+        tracks = mkv.get_track()
+        for track in tracks:
+            if not track._track_type == 'subtitles' and 'SubStationAlpha' in str(track._track_codec):
+                continue
+            dst_srt_path = file.replace(
+                '.mkv', f'_track{str(track._track_id)}_{track._language}.ass')
+            print(f"mkvextract:{track}")
+            os.system(
+                f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
+            updateAssStyle(dst_srt_path)
+            return
+
+        for track in tracks:
+            if not track._track_type == 'subtitles' and 'SRT' in track._track_codec:
+                continue
+            isEN = track._language == 'eng' and 'SDH' in str(track.track_name)
+            if not isEN or track._language == 'chi' or track._language == 'zh' or track._language == 'zho':
+                continue
+            dst_srt_path = file.replace(
+                '.mkv', '_track'+str(track._track_id)+'_'+track._language+'.srt')
+            print(track)
+            os.system(
+                f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
+            track_cnt += 1
+            if track_cnt == 1:
+                srt2ass(dst_srt_path, isEN)
 
 
 def updateAssStyle(input_file):
+    
+    if type(input_file) is list:
+        with ThreadPoolExecutor(max_workers=17) as executor:
+            return executor.map(updateAssStyle, input_file, timeout=15)
+
     print(f"processing updateAssStyle: {input_file}")
 
     src = fileopen(input_file)
@@ -431,9 +391,6 @@ def loadArgs():
     group.add_argument('-e', "--extract-sub",
                        help="extract subtitles from .mkv",
                        action='store_true')
-    group.add_argument('--extract-srt',
-                       help="extract srt ",
-                       action='store_true')
     global Args
     Args = parser.parse_args()
     print(Args)
@@ -471,16 +428,14 @@ def main():
 
     filelist = getFilelist()
 
-    if Args.extract_srt:
-        extractSrtFromAssFile(filelist[0])
-    elif Args.update_ass:
-        updateAssStyleAll(filelist)
+    if Args.update_ass:
+        updateAssStyle(filelist)
     elif Args.extract_sub:
-        extractSubAll(filelist)
+        extractSubFromMKV(filelist)
     elif Args.merge_srt:
-        mergeFilelist(filelist)
+        merge2srt(filelist)
     else:
-        srt2assAll(filelist)
+        srt2ass(filelist)
     return
 
 

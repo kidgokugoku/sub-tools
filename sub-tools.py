@@ -14,6 +14,7 @@ from pymkv import MKVFile, MKVTrack
 # ASS/SSA style config
 
 # Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+# 默认的字体样式，建议通过 Aegisub 自己调整合适后，用文本方式打开字幕复制粘贴过来。
 STR_DEFAULT_STYLE = '''Style: Default,思源宋体 CN SemiBold,28,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0,0,1,1,3,2,10,10,10,1
 Style: EN,GenYoMin TW M,12,&H003CA8DC,&H000000FF,&H00000000,&H00000000,-1,0,0,0,90,100,0,0,1,1,2,2,10,10,10,1
 Style: JP,GenYoMin JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,2,2,10,10,10,1'''
@@ -30,9 +31,9 @@ STR_2nd_STYLE = STR_2nd_EN_STYLE
 ARGS = ''
 
 # merge srt config
-INT_TIMESHIFT = 1000
+INT_TIMESHIFT = 1000                        # 合并字幕时的偏移量
 # iso639 code list for the language you need to extract from MKV file
-LIST_EXTRACT_LANGUAGE_ISO639=[
+LIST_EXTRACT_LANGUAGE_ISO639=[              # 需要提取的字幕语言的ISO639代码
 #    'en',
     'zh',
 #    'eng',
@@ -184,7 +185,7 @@ def merge2srt(inputfilelist):
     it = iter(inputfilelist)
     for file in it:
         mergeFile = MergeFile(file, next(it))
-        output_file = re.sub(r'_track[0-9]+?|\.(en|ch)', '', file)
+        output_file = re.sub(r'_track[0-9]+?|\.(en|zh)', '', file)
         output_file = re.sub('.srt', '_merge.srt', file)
         mergeFile.saveTo(output_file)
         output_filelist.append(output_file)
@@ -203,7 +204,7 @@ def srt2ass(input_file, isEn=False):
         print(f"{input_file} not exist")
         return
 
-    print(f"processing srt2ass: {input_file}")
+    print(f"processing srt2ass: {input_file}\n")
 
     src = fileOpen(input_file)
     tmpText = src[0]
@@ -311,7 +312,7 @@ def updateAssStyle(input_file):
         with ThreadPoolExecutor(max_workers=17) as executor:
             return executor.map(updateAssStyle, input_file, timeout=15)
 
-    print(f"processing updateAssStyle: {input_file}")
+    print(f"processing updateAssStyle: {input_file}\n")
 
     src = fileOpen(input_file)
     output_file = input_file
@@ -333,7 +334,7 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
     SECOND_LANG_STYLE = STR_2nd_STYLE.replace('\\', '\\\\')
     output_str = re.sub(r',\{\\fn(.*?)\}', ',',  output_str)
     output_str = re.sub(r'\{\\r\}', '',  output_str)
-    output_str = re.sub(r'\\N\{.*?\}',
+    output_str = re.sub(r'\\N(\{.*?\})?',
                         rf'\\N{SECOND_LANG_STYLE}',  output_str)  # 英文行
     output_str = re.sub(r'Dialogue:(.*?,.*?,.*?,)(.*),([0-9]+,[0-9]+,[0-9]+,)',
                         r'Dialogue:\1Default,,\3', output_str)  # 默认字体

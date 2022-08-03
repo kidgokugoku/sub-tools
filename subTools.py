@@ -27,11 +27,9 @@ STR_UNDER_JP_STYLE = '{\\rJp}'
 
 sub = namedtuple("sub", "begin, end, content,beginTime,endTime")
 subEx = namedtuple("sub", "begin, end, content")
-
+Args = ''
 utf8bom = ''
 enc = ''
-duo = False
-inputcontent = []
 timeShift = 1000  # ms
 
 
@@ -50,7 +48,7 @@ def process(line):
     try:
         (begin, end) = line[1].strip().split(" --> ")
     except:
-        print("spliting error:{line}")
+        print(f"spliting error:{line}")
         return
     content = [' '.join(line[2:])]
     beginTime = time(begin)
@@ -83,7 +81,7 @@ def mergeFilelist(filelist):
     if(Args.delete):
         for arg in filelist:
             os.remove(arg)
-            print('deleted: {arg}')
+            print(f'deleted: {arg}')
     return outFilelist
 
 
@@ -116,7 +114,7 @@ def merge2srts(inputfile, outputfile):
     content = []
     CH_first_flag = 0
     for f in inputfile:
-        print("merging: {f}")
+        print(f"merging: {f}")
         line = []
         global enc
         global utf8bom
@@ -160,7 +158,7 @@ def merge2srts(inputfile, outputfile):
 
 
 def extractSrt(inputfile):
-    print("extracting: {inputfile}")
+    print(f"extracting: {inputfile}")
     content1 = []
     content2 = []
     line = []
@@ -229,13 +227,11 @@ def timeMerge(c1, c2):
 
 
 def srt2ass(input_file, isEn=False):
-    global duo
-
     if not os.path.isfile(input_file):
-        print("{input_file} not exist")
+        print(f"{input_file} not exist")
         return
 
-    print("processing srt2ass: {input_file}")
+    print(f"processing srt2ass: {input_file}")
 
     src = fileopen(input_file)
     tmp = src[0]
@@ -278,7 +274,7 @@ def srt2ass(input_file, isEn=False):
                 if lineCount < 2:
                     tmpLines += line
                 else:
-                    if duo:
+                    if Args.duo:
                         tmpLines += '\\N' + STR_UNDER_STYLE + line
                     else:
                         tmpLines += '\\N' + line
@@ -296,7 +292,7 @@ def srt2ass(input_file, isEn=False):
         r'<font\s+color="?#(\w{2})(\w{2})(\w{2})"?>', "{\\\\c&H\\3\\2\\1&}", subLines)
     subLines = re.sub(r'</font>', "", subLines)
 
-    converter = opencc.OpenCC('s2hk.json')
+    converter = opencc.OpenCC('s2hk.json')  # 将简中转换成繁中
     subLines = converter.convert(subLines)
 
     head_str = '''[Script Info]
@@ -357,30 +353,39 @@ def updateAssAll(filelist):
 
 
 def extractSub(file):
+    track_cnt = 0
     mkv = MKVFile(file)
     tracks = mkv.get_track()
+    for track in tracks:
+        if track._track_type == 'subtitles':
+            if 'SubStationAlpha' in str(track._track_codec):
+                dst_srt_path = file.replace(
+                    '.mkv', '_track'+str(track._track_id)+'_'+track._language+'.ass')
+                print(track)
+                os.system('mkvextract \"{}\" tracks {}:\"{}\"\n'.format(
+                    file, track._track_id, dst_srt_path))
+                updateAssStyle(dst_srt_path)
+                return
+
     for track in tracks:
         if track._track_type == 'subtitles':
             if 'SRT' in track._track_codec:
                 en = track._language == 'eng' and 'SDH' in str(
                     track.track_name)
                 if en or track._language == 'chi' or track._language == 'zh' or track._language == 'zho':
-                    if 'SRT' in str(track._track_codec):
-                        dst_srt_path = file.replace(
-                            '.mkv', '_track'+str(track._track_id)+'_'+track._language+'.srt')
-                    elif 'SubStationAlpha' in str(track._track_codec):
-                        dst_srt_path = file.replace(
-                            '.mkv', '_track'+str(track._track_id)+'_'+track._language+'.ass')
+                    dst_srt_path = file.replace(
+                        '.mkv', '_track'+str(track._track_id)+'_'+track._language+'.srt')
                     print(track)
-                    os.system('mkvextract {} tracks {}:{}\n'.format(
+                    os.system('mkvextract \"{}\" tracks {}:\"{}\"\n'.format(
                         file, track._track_id, dst_srt_path))
-                    srt2ass(dst_srt_path, en)
-    return
+                    track_cnt += 1
+                    if track_cnt == 1:
+                        srt2ass(dst_srt_path, en)
 
 
 def extractSubAll(filelist):
-    for arg in filelist:
-        extractSub(arg)
+    for file in filelist:
+        extractSub(file)
     return
 
 
@@ -390,7 +395,7 @@ def addSubAll(filelist):
 
 
 def updateAssStyle(input_file):
-    print("processing updateAssStyle:+{input_file}")
+    print(f"processing updateAssStyle: {input_file}")
 
     src = fileopen(input_file)
     output_file = input_file
@@ -404,25 +409,26 @@ def updateAssStyle(input_file):
     if u'\ufeff' in tmp:
         tmp = tmp.replace(u'\ufeff', '')
         utf8bom = u'\ufeff'
+
     if Args.english:
-        output_str = re.sub(r'\[V4(\+)? Styles\][\s\S]*?\[Events\]', '''generated by subTool.py
+        output_str = re.sub(r'\[V4(\+)? Styles\][\s\S]*?\[Events\]', f'''generated by subTool.py
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-'''+STR_EN_STYLE+'''
+{STR_EN_STYLE}
 [Events]''', tmp, 1)
     else:
-        output_str = re.sub(r'\[V4(\+)? Styles\][\s\S]*?\[Events\]', '''generated by subTool.py
+        output_str = re.sub(r'\[V4(\+)? Styles\][\s\S]*?\[Events\]', f'''generated by subTool.py
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-'''+STR_CH_STYLE+'''
+{STR_CH_STYLE}
 [Events]''', tmp, 1)
         sytlestr = STR_UNDER_EN_STYLE.replace('\\', '\\\\')
         output_str = re.sub(r',\{\\fn(.*?)\}', ',',  output_str)
         output_str = re.sub(r'\{\\r\}', '',  output_str)
-        output_str = re.sub(r'N\{(.*)\}(\S)', 'N' +
-                            sytlestr+r'\2',  output_str)  # 英文行
+        output_str = re.sub(r'\\N\{.*?\}',
+                            rf'\\N{sytlestr}',  output_str)  # 英文行
         output_str = re.sub(r'Dialogue:(.*?,.*?,.*?,)(.*),([0-9]+,[0-9]+,[0-9]+,)',
                             r'Dialogue:\1Default,,\3', output_str)  # 默认字体
 
@@ -441,7 +447,7 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 
 def removeFile(file):
     os.remove(file)
-    print('deleted: {file}')
+    print(f'deleted: {file}')
 
 
 def loadArgs():
@@ -516,7 +522,6 @@ def getFilelist():
 
 
 def main():
-    global duo
 
     loadArgs()
     print(Args)
@@ -533,11 +538,9 @@ def main():
         addSubAll(filelist)
     elif Args.merge_srt:
         mergedFiles = mergeFilelist(filelist)
-        duo = True
+        Args.duo = True
         srt2assAll(mergedFiles)
     else:
-        if Args.duo:
-            duo = True
         srt2assAll(filelist)
     return
 

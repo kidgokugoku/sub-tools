@@ -201,19 +201,19 @@ def merge2srt(inputfilelist):
     srt2ass(output_filelist)
 
 
-def srt2ass(input_file, isEn=False):
-    if type(input_file) is list and len(input_file)>1:
+def srt2ass(input_filelist, isEn=False):
+    if type(input_filelist) is list and len(input_filelist)>1:
         with ThreadPoolExecutor(max_workers=17) as executor:
-            return executor.map(srt2ass, input_file, timeout=15)
+            return executor.map(srt2ass, input_filelist, timeout=15)
     else:
-        input_file=input_file[0]
-    if not os.path.isfile(input_file):
-        print(f"{input_file} not exist")
+        input_filelist=input_filelist[0]
+    if not os.path.isfile(input_filelist):
+        print(f"{input_filelist} not exist")
         return
 
-    print(f"processing srt2ass: {input_file}\n")
+    print(f"processing srt2ass: {input_filelist}\n")
 
-    src = fileOpen(input_file)
+    src = fileOpen(input_filelist)
     tmpText = src[0]
     utf8bom = ''
 
@@ -272,12 +272,12 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
     output_str = utf8bom + head_str + '\n' + subLines
     output_str = output_str.encode('utf-8')
 
-    output_file = '.'.join(input_file.split('.')[:-1]) + '.ass'
+    output_file = '.'.join(input_filelist.split('.')[:-1]) + '.ass'
     output_file = re.sub(r'(_track[0-9]+?|_merge)|\.(en|zh)', '', output_file)
     with open(output_file, 'wb') as output:
         output.write(output_str)
-    if ARGS.delete or '_merge' in input_file:
-        removeFile(input_file)
+    if ARGS.delete or '_merge' in input_filelist:
+        removeFile(input_filelist)
     return
 
 
@@ -311,18 +311,19 @@ def extractSubFromMKV(input_filelist):
                 f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
             track_cnt += 1
             if track_cnt == 1:
-                srt2ass(dst_srt_path, isEN)
+                srt2ass([dst_srt_path], isEN)
 
 
-def updateAssStyle(input_file):
-    if type(input_file) is list:
+def updateAssStyle(input_filelist):
+    if type(input_filelist) is list and len(input_filelist)>1:
         with ThreadPoolExecutor(max_workers=17) as executor:
-            return executor.map(updateAssStyle, input_file, timeout=15)
+            return executor.map(updateAssStyle, input_filelist, timeout=15)
+    else:
+        input_filelist=input_filelist[0]
+    print(f"processing updateAssStyle: {input_filelist}\n")
 
-    print(f"processing updateAssStyle: {input_file}\n")
-
-    src = fileOpen(input_file)
-    output_file = input_file
+    src = fileOpen(input_filelist)
+    output_file = input_filelist
     tmp = src[0]
     encoding = src[1]
 

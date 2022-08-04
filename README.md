@@ -1,4 +1,5 @@
-﻿# subTools
+﻿# sub-tools
+
  
  现有功能：
 
@@ -13,24 +14,24 @@
 
 直接下载.py文件或者克隆项目就可以使用。
 ```sh
-$ git clone https://github.com/kidgokugoku/subTools
+$ git clone https://github.com/kidgokugoku/sub-tools
 ```
 
 ## usage
 
 ```sh
-$ subTools.py
+$ sub-tools.py
 # 直接运行默认将运行目录下 .srt 文件转换为 .ass
 ```
 ```sh
-$ subTools.py [-u | -m | -e]
+$ sub-tools.py [-u | -m | -e]
 # -u 参数用于更新 ass 字幕的样式
 # -m 参数用于合并双语字幕
 # -e 参数用于提取 mkv 文件中的字幕
 ```
 
 ```
-usage: subTools.py [-h] [--english] [-d] [-b] [-a] [-u | -m | -e] [file ...]
+usage: sub-tools.py [-h] [--english] [-d] [-b] [-a] [-u | -m | -e] [file ...]
 
 positional arguments:
   file               srt file location, default all .srt files in current folder

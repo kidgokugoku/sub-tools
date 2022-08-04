@@ -5,6 +5,7 @@ import re
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from glob import glob
+from warnings import catch_warnings
 
 import chardet
 import opencc
@@ -33,13 +34,14 @@ ARGS = ''
 # merge srt config
 INT_TIMESHIFT = 1000                        # 合并字幕时的偏移量
 # iso639 code list for the language you need to extract from MKV file
-LIST_EXTRACT_LANGUAGE_ISO639=[              # 需要提取的字幕语言的ISO639代码
-#    'en',
+LIST_EXTRACT_LANGUAGE_ISO639 = [              # 需要提取的字幕语言的ISO639代码
+    #    'en',
     'zh',
-#    'eng',
+    #    'eng',
     'zho',
     'chi',
-    ]
+]
+
 
 class MergeFile:
     file1 = ''
@@ -99,7 +101,8 @@ class MergeFile:
         return
 
     def __saveMergedSubFile(self, raw, f):
-        output = UTF8BOM
+        #output = UTF8BOM
+        output=''
         for i in range(len(raw)):
             output += ("%d\r\n" % (i+1))
             output += ("%s --> %s \r\n" % (raw[i].begin, raw[i].end))
@@ -150,9 +153,9 @@ class MergeFile:
             if((not lockType == 2) and index2 < len(c2)):
                 capTime2 = c2[index2].beginTime
             lockType = 0
-            if(capTime1 > capTime2 and capTime1 > capTime2+timeShift and index2 < len(c2) or index1 == len(c1)):
+            if(capTime1 > capTime2 and capTime1 > capTime2+self.timeShift and index2 < len(c2) or index1 == len(c1)):
                 lockType = 1
-            if(capTime2 > capTime1 and capTime2 > capTime1+timeShift and index1 < len(c1) or index2 == len(c2)):
+            if(capTime2 > capTime1 and capTime2 > capTime1+self.timeShift and index1 < len(c1) or index2 == len(c2)):
                 lockType = 2
 
             if(not lockType == 1):
@@ -184,7 +187,10 @@ def merge2srt(inputfilelist):
     output_filelist = []
     it = iter(inputfilelist)
     for file in it:
-        mergeFile = MergeFile(file, next(it))
+        try:
+            mergeFile = MergeFile(file, next(it))
+        except:
+            break
         output_file = re.sub(r'_track[0-9]+?|\.(en|zh)', '', file)
         output_file = re.sub('.srt', '_merge.srt', file)
         mergeFile.saveTo(output_file)
@@ -196,10 +202,11 @@ def merge2srt(inputfilelist):
 
 
 def srt2ass(input_file, isEn=False):
-    if type(input_file) is list:
+    if type(input_file) is list and len(input_file)>1:
         with ThreadPoolExecutor(max_workers=17) as executor:
             return executor.map(srt2ass, input_file, timeout=15)
-
+    else:
+        input_file=input_file[0]
     if not os.path.isfile(input_file):
         print(f"{input_file} not exist")
         return
@@ -220,7 +227,7 @@ def srt2ass(input_file, isEn=False):
     lineCount = 0
     subLines = ''
     tmpLines = ''
-    STR_2nd_STYLE = STR_2nd_STYLE if ARGS.bilingual else ''
+    second_style = STR_2nd_STYLE if ARGS.bilingual else ''
 
     for index in range(len(lines)):
         line = lines[index]
@@ -236,7 +243,7 @@ def srt2ass(input_file, isEn=False):
         elif lineCount < 2:
             tmpLines += line
         else:
-            tmpLines += '\\N' + STR_2nd_STYLE + line
+            tmpLines += '\\N' + second_style + line
         lineCount += 1
     subLines += tmpLines + "\r\n"
     # timestamp replace
@@ -266,10 +273,9 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
     output_str = output_str.encode('utf-8')
 
     output_file = '.'.join(input_file.split('.')[:-1]) + '.ass'
-    output_file = re.sub(r'(_track[\s\S]*?|_merge)\.', '.', output_file)
+    output_file = re.sub(r'(_track[0-9]+?|_merge)|\.(en|zh)', '', output_file)
     with open(output_file, 'wb') as output:
         output.write(output_str)
-
     if ARGS.delete or '_merge' in input_file:
         removeFile(input_file)
     return
@@ -278,7 +284,8 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
 def extractSubFromMKV(input_filelist):
     for file in input_filelist:
         mkv = MKVFile(file)
-        tracks =list(filter(lambda x: x._track_type == 'subtitles', mkv.get_track())) 
+        tracks = list(filter(lambda x: x._track_type ==
+                      'subtitles', mkv.get_track()))
         for track in tracks:
             if not 'SubStationAlpha' in str(track._track_codec):
                 continue
@@ -288,8 +295,8 @@ def extractSubFromMKV(input_filelist):
             os.system(
                 f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
             updateAssStyle(dst_srt_path)
-            return
-        
+            break
+
         track_cnt = 0
         for track in tracks:
             if not 'SRT' in track._track_codec:

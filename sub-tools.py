@@ -5,11 +5,9 @@ import re
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from glob import glob
-from warnings import catch_warnings
 
 import chardet
-import opencc
-from pymkv import MKVFile, MKVTrack
+from pymkv import MKVFile
 
 
 # ASS/SSA style config
@@ -283,6 +281,7 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
 
 def extractSubFromMKV(input_filelist):
     for file in input_filelist:
+        print(f"extracting: {file}")
         mkv = MKVFile(file)
         tracks = list(filter(lambda x: x._track_type ==
                       'subtitles', mkv.get_track()))
@@ -301,8 +300,9 @@ def extractSubFromMKV(input_filelist):
         for track in tracks:
             if not 'SRT' in track._track_codec:
                 continue
-            isEN = track._language == 'eng' and 'SDH' in str(track.track_name)
-            if not isEN or track._language in LIST_EXTRACT_LANGUAGE_ISO639:
+            isEN = track._language == 'eng'
+            # and 'SDH' in str(track.track_name)
+            if not (isEN or track._language in LIST_EXTRACT_LANGUAGE_ISO639):
                 continue
             dst_srt_path = file.replace(
                 '.mkv', f'_track{track._track_id}_{track._language}.srt')
@@ -310,8 +310,8 @@ def extractSubFromMKV(input_filelist):
             os.system(
                 f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
             track_cnt += 1
-            if track_cnt == 1:
-                srt2ass([dst_srt_path], isEN)
+        if track_cnt == 1:
+            srt2ass([dst_srt_path], isEN)
 
 
 def updateAssStyle(input_filelist):
@@ -334,7 +334,9 @@ def updateAssStyle(input_filelist):
         utf8bom = u'\ufeff'
 
     STR_STYLE = STR_EN_STYLE if ARGS.english else STR_DEFAULT_STYLE
-    output_str = re.sub(r'\[V4(\+)? Styles\][\s\S]*?\[Events\]', f'''[V4+ Styles]
+    output_str = re.sub(r'\[Script Info\][\s\S]*?\[Events\]', f'''[Script Info]
+ScriptType: v4.00+
+[V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 {STR_STYLE}
 [Events]''', tmp, 1)
@@ -429,6 +431,10 @@ def main():
     loadArgs()
 
     filelist = getFilelist()
+
+    if not filelist:
+        return
+
     if ARGS.update_ass:
         updateAssStyle(filelist)
     elif ARGS.extract_sub:

@@ -14,11 +14,11 @@ from pymkv import MKVFile
 
 # Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 # 默认的字体样式，建议通过 Aegisub 自己调整合适后，用文本方式打开字幕复制粘贴过来。
-STR_DEFAULT_STYLE = '''Style: Default,思源宋体 CN SemiBold,28,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0,0,1,1,3,2,10,10,10,1
+STR_DEFAULT_STYLE = '''Style: Default,思源宋体 Heavy,28,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0.1,0,1,1,3,2,10,10,15,1
 Style: EN,GenYoMin TW M,12,&H003CA8DC,&H000000FF,&H00000000,&H00000000,-1,0,0,0,90,100,0,0,1,1,2,2,10,10,10,1
 Style: JP,GenYoMin JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,2,2,10,10,10,1'''
 
-STR_CN_STYLE = 'Style: Default,思源宋体 CN SemiBold,28,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0,0,1,1,3,2,10,10,10,1'
+STR_CN_STYLE = 'Style: Default,GenYoMin TW B,23,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0,0,1,1,3,2,10,10,10,1'
 STR_EN_STYLE = 'Style: Default,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.3,3,2,10,10,20,1'
 STR_JP_STYLE = 'Style: Default,GenYoMin JP B,23,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0.1,2,2,10,10,10,1'
 
@@ -99,7 +99,7 @@ class MergeFile:
         return
 
     def __saveMergedSubFile(self, raw, f):
-        #output = UTF8BOM
+        # output = UTF8BOM
         output = ''
         for i in range(len(raw)):
             output += ("%d\r\n" % (i+1))
@@ -181,9 +181,9 @@ def fileOpen(input_file):
     return [tmp, enc]
 
 
-def merge2srt(inputfilelist):
+def merge2srt(input_filelist):
     output_filelist = []
-    it = iter(inputfilelist)
+    it = iter(input_filelist)
     for file in it:
         try:
             mergeFile = MergeFile(file, next(it))
@@ -194,7 +194,7 @@ def merge2srt(inputfilelist):
         mergeFile.saveTo(output_file)
         output_filelist.append(output_file)
     if(ARGS.delete):
-        removeFile(inputfilelist)
+        removeFile(input_filelist)
     ARGS.bilingual = True
     srt2ass(output_filelist)
 
@@ -279,41 +279,6 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
     return
 
 
-def extractSubFromMKV(input_filelist):
-    for file in input_filelist:
-        print(f"extracting: {file}")
-        mkv = MKVFile(file)
-        tracks = list(filter(lambda x: x._track_type ==
-                      'subtitles', mkv.get_track()))
-        for track in tracks:
-            if not 'SubStationAlpha' in str(track._track_codec):
-                continue
-            dst_srt_path = file.replace(
-                '.mkv', f'_track{str(track._track_id)}_{track._language}.ass')
-            print(f"mkvextract:{track}")
-            os.system(
-                f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
-            updateAssStyle(dst_srt_path)
-            break
-
-        track_cnt = 0
-        for track in tracks:
-            if not 'SRT' in track._track_codec:
-                continue
-            isEN = track._language == 'eng'
-            # and 'SDH' in str(track.track_name)
-            if not (isEN or track._language in LIST_EXTRACT_LANGUAGE_ISO639):
-                continue
-            dst_srt_path = file.replace(
-                '.mkv', f'_track{track._track_id}_{track._language}.srt')
-            print(track)
-            os.system(
-                f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
-            track_cnt += 1
-        if track_cnt == 1:
-            srt2ass([dst_srt_path], isEN)
-
-
 def updateAssStyle(input_filelist):
     if type(input_filelist) is list and len(input_filelist) > 1:
         with ThreadPoolExecutor(max_workers=17) as executor:
@@ -334,13 +299,15 @@ def updateAssStyle(input_filelist):
         utf8bom = u'\ufeff'
 
     STR_STYLE = STR_EN_STYLE if ARGS.english else STR_DEFAULT_STYLE
+    SECOND_LANG_STYLE = STR_2nd_STYLE.replace('\\', '\\\\') if ARGS.bilingual or tmp.count(
+        '\n')*0.95 < tmp.count('\\N') else ''
+    print(f"{STR_2nd_STYLE}")
     output_str = re.sub(r'\[Script Info\][\s\S]*?\[Events\]', f'''[Script Info]
 ScriptType: v4.00+
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 {STR_STYLE}
 [Events]''', tmp, 1)
-    SECOND_LANG_STYLE = STR_2nd_STYLE.replace('\\', '\\\\')
     output_str = re.sub(r',\{\\fn(.*?)\}', ',',  output_str)
     output_str = re.sub(r'\{\\r\}', '',  output_str)
     output_str = re.sub(r'\\N(\{.*?\})?',
@@ -354,6 +321,41 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
     with open(output_file, 'wb') as output:
         output.write(output_str)
     return
+
+
+def extractSubFromMKV(input_filelist):
+    for file in input_filelist:
+        print(f"extracting: {file}")
+        mkv = MKVFile(file)
+        tracks = list(filter(lambda x: x._track_type ==
+                             'subtitles', mkv.get_track()))
+        for track in tracks:
+            if not 'SubStationAlpha' in str(track._track_codec):
+                continue
+            dst_srt_path = file.replace(
+                '.mkv', f'_track{str(track._track_id)}_{track._language}.ass')
+            print(f"mkvextract:{track}")
+            os.system(
+                f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
+            updateAssStyle(dst_srt_path)
+            continue
+
+        track_cnt = 0
+        for track in tracks:
+            if not 'SRT' in track._track_codec:
+                continue
+            isEN = track._language == 'eng' or track._language == 'en'
+            # and 'SDH' in str(track.track_name)
+            if not (isEN or track._language in LIST_EXTRACT_LANGUAGE_ISO639):
+                continue
+            dst_srt_path = file.replace(
+                '.mkv', f'_track{track._track_id}_{track._language}.srt')
+            print(track)
+            os.system(
+                f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
+            track_cnt += 1
+        if track_cnt == 1:
+            srt2ass([dst_srt_path], isEN)
 
 
 def removeFile(filelist):

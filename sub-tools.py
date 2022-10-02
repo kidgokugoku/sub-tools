@@ -2,6 +2,7 @@
 import argparse
 import os
 import re
+import logging
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from glob import glob
@@ -15,7 +16,7 @@ from pymkv import MKVFile
 # Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 # 默认的字体样式，建议通过 Aegisub 自己调整合适后，用文本方式打开字幕复制粘贴过来。
 STR_DEFAULT_STYLE = '''Style: Default,思源宋体 Heavy,28,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0.1,0,1,1,3,2,10,10,15,1
-Style: EN,GenYoMin TW M,12,&H003CA8DC,&H000000FF,&H00000000,&H00000000,-1,0,0,0,90,100,0,0,1,1,2,2,10,10,10,1
+Style: EN,GenYoMin TW B,11,&H003CA8DC,&H000000FF,&H00000000,&H00000000,1,0,0,0,90,100,0,0,1,1,2,2,10,10,10,1
 Style: JP,GenYoMin JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,2,2,10,10,10,1'''
 
 STR_CN_STYLE = 'Style: Default,GenYoMin TW B,23,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0,0,1,1,3,2,10,10,10,1'
@@ -40,6 +41,10 @@ LIST_EXTRACT_LANGUAGE_ISO639 = [              # 需要提取的字幕语言的IS
     'chi',
 ]
 
+logging.basicConfig(level=logging.INFO,
+                    format='%(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("sub_tools")
+
 
 class MergeFile:
     file1 = ''
@@ -59,7 +64,7 @@ class MergeFile:
         is_CHI_first_sub = 0
         inputfile = [self.file1, self.file2]
         for f in inputfile:
-            print(f"merging: {f}")
+            logger.info(f"merging: {f}")
             line = []
 
             src = fileOpen(f)
@@ -125,7 +130,7 @@ class MergeFile:
         try:
             (begin, end) = line[1].strip().split(" --> ")
         except:
-            print(f"spliting error:{line}")
+            logger.error(f"spliting error:{line}")
             return
         content = [' '.join(line[2:])]
         beginTime = self.__time(begin)
@@ -206,10 +211,10 @@ def srt2ass(input_filelist, isEn=False):
     elif type(input_filelist) is list:
         input_filelist = input_filelist[0]
     if not os.path.isfile(input_filelist):
-        print(f"{input_filelist} not exist")
+        logger.error(f"{input_filelist} not exist")
         return
 
-    print(f"processing srt2ass: {input_filelist}\n")
+    logger.info(f"processing srt2ass: {input_filelist}\n")
 
     src = fileOpen(input_filelist)
     tmpText = src[0]
@@ -285,7 +290,7 @@ def updateAssStyle(input_filelist):
             return executor.map(updateAssStyle, input_filelist, timeout=15)
     elif type(input_filelist) is list:
         input_filelist = input_filelist[0]
-    print(f"processing updateAssStyle: {input_filelist}\n")
+    logger.info(f"processing updateAssStyle: {input_filelist}\n")
 
     src = fileOpen(input_filelist)
     output_file = input_filelist
@@ -300,8 +305,9 @@ def updateAssStyle(input_filelist):
 
     STR_STYLE = STR_EN_STYLE if ARGS.english else STR_DEFAULT_STYLE
     SECOND_LANG_STYLE = STR_2nd_STYLE.replace('\\', '\\\\') if ARGS.bilingual or tmp.count(
-        '\n')*0.95 < tmp.count('\\N') else ''
-    print(f"{STR_2nd_STYLE}")
+        '\n')*0.9 < tmp.count('\\N') else ''
+    if SECOND_LANG_STYLE != '' and not ARGS.bilingual:
+        logger.info(f"detected bilingual subtitiles: {input_filelist}\n")
     output_str = re.sub(r'\[Script Info\][\s\S]*?\[Events\]', f'''[Script Info]
 ScriptType: v4.00+
 [V4+ Styles]
@@ -325,7 +331,7 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 
 def extractSubFromMKV(input_filelist):
     for file in input_filelist:
-        print(f"extracting: {file}")
+        logger.info(f"extracting: {file}")
         mkv = MKVFile(file)
         tracks = list(filter(lambda x: x._track_type ==
                              'subtitles', mkv.get_track()))
@@ -334,7 +340,7 @@ def extractSubFromMKV(input_filelist):
                 continue
             dst_srt_path = file.replace(
                 '.mkv', f'_track{str(track._track_id)}_{track._language}.ass')
-            print(f"mkvextract:{track}")
+            logger.info(f"mkvextract:{track}")
             os.system(
                 f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
             updateAssStyle(dst_srt_path)
@@ -350,7 +356,7 @@ def extractSubFromMKV(input_filelist):
                 continue
             dst_srt_path = file.replace(
                 '.mkv', f'_track{track._track_id}_{track._language}.srt')
-            print(track)
+            logger.info(track)
             os.system(
                 f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
             track_cnt += 1
@@ -362,10 +368,10 @@ def removeFile(filelist):
     if type(filelist) is list:
         for file in filelist:
             os.remove(file)
-            print(f'deleted: {file}')
+            logger.info(f'deleted: {file}')
     else:
         os.remove(filelist)
-        print(f'deleted: {filelist}')
+        logger.info(f'deleted: {filelist}')
     return
 
 
@@ -382,11 +388,15 @@ def loadArgs():
                         help="delete the original .srt file",
                         action='store_true')
     parser.add_argument("-b", "--bilingual",
-                        help="handle files that contain two language",
+                        help="force handle files that contain two language",
                         action='store_true')
     parser.add_argument("-a", "--all-dir",
                         help="process all .srt/.ass including all children dir",
                         action='store_true')
+    parser.add_argument("--debug",
+                        help="print debug level log",
+                        action='store_true')
+
     group = parser.add_mutually_exclusive_group()
 
     group.add_argument('-u', "--update-ass",
@@ -400,7 +410,7 @@ def loadArgs():
                        action='store_true')
     global ARGS
     ARGS = parser.parse_args()
-    print(ARGS)
+    logger.debug(ARGS)
 
 
 def getFilelist():
@@ -425,12 +435,15 @@ def getFilelist():
         else:
             filelist += glob(os.path.join(arg, '*.srt'))
     filelist = list(filter(lambda x: os.path.isfile(x), filelist))
-    print(filelist)
+    logger.debug(filelist)
     return filelist
 
 
 def main():
     loadArgs()
+
+    if ARGS.debug:
+        logger.setLevel(logging.DEBUG)
 
     filelist = getFilelist()
 

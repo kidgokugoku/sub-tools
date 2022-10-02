@@ -39,6 +39,7 @@ LIST_EXTRACT_LANGUAGE_ISO639 = [              # 需要提取的字幕语言的IS
     #    'eng',
     'zho',
     'chi',
+    'jpn',
 ]
 
 logging.basicConfig(level=logging.INFO,
@@ -61,7 +62,7 @@ class MergeFile:
     def saveTo(self, outputfile):
         content1 = []
         content = []
-        is_CHI_first_sub = 0
+        cjk_character_percentage = 0
         inputfile = [self.file1, self.file2]
         for f in inputfile:
             logger.info(f"merging: {f}")
@@ -75,7 +76,9 @@ class MergeFile:
             if u'\ufeff' in tmp:
                 tmp = tmp.replace(u'\ufeff', '')
                 self.__encoding = 'utf-8'
-            is_CHI_first_sub = re.search(r'[\u4e00-\u9fa5]', tmp)
+            cjk_character_percentage = sum(map(lambda c: '\u4e00' <= c <= '\u9fa5', tmp))/len(tmp) if cjk_character_percentage == 0 else sum(
+                map(lambda c: '\u4e00' <= c <= '\u9fa5', tmp))/len(tmp) - cjk_character_percentage
+            logger.debug(f"cjk percentage in {f}: {cjk_character_percentage}")
             tmp = tmp.replace("\r", "")
             lines = [x.strip() for x in tmp.split("\n") if x.strip()]
             tmp = ''
@@ -95,8 +98,10 @@ class MergeFile:
                 content1 = content
                 content = []
 
-        if not is_CHI_first_sub:
+        if cjk_character_percentage < 0:
             outputraw = self.__timeMerge(content1, content)
+            global STR_2nd_STYLE
+            STR_2nd_STYLE = STR_2nd_JP_STYLE
         else:
             outputraw = self.__timeMerge(content, content1)
 
@@ -256,7 +261,7 @@ def srt2ass(input_filelist, isEn=False):
     subLines = re.sub(r'<([ubi])>', "{\\\\\g<1>1}", subLines)
     subLines = re.sub(r'</([ubi])>', "{\\\\\g<1>0}", subLines)
     subLines = re.sub(
-        r'<font\s+color="?#(\w{2})(\w{2})(\w{2})"?>', "{\\\\c&H\\3\\2\\1&}", subLines)
+        r'<font\s+color="?(\w*?)"?>', "", subLines)
     subLines = re.sub(r'</font>', "", subLines)
 
     # converter = opencc.OpenCC('s2hk.json')  # 将简中转换成繁中
@@ -305,7 +310,7 @@ def updateAssStyle(input_filelist):
 
     STR_STYLE = STR_EN_STYLE if ARGS.english else STR_DEFAULT_STYLE
     SECOND_LANG_STYLE = STR_2nd_STYLE.replace('\\', '\\\\') if ARGS.bilingual or tmp.count(
-        '\n')*0.9 < tmp.count('\\N') else ''
+        '\n')*0.8 < tmp.count('\\N') else ''
     if SECOND_LANG_STYLE != '' and not ARGS.bilingual:
         logger.info(f"detected bilingual subtitiles: {input_filelist}\n")
     output_str = re.sub(r'\[Script Info\][\s\S]*?\[Events\]', f'''[Script Info]
@@ -340,7 +345,7 @@ def extractSubFromMKV(input_filelist):
                 continue
             dst_srt_path = file.replace(
                 '.mkv', f'_track{str(track._track_id)}_{track._language}.ass')
-            logger.info(f"mkvextract:{track}")
+            logger.debug(f"mkvextract:{track}")
             os.system(
                 f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
             updateAssStyle(dst_srt_path)

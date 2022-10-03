@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
 import argparse
+import logging
 import os
 import re
-import logging
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from glob import glob
 
 import chardet
 from pymkv import MKVFile
-
 
 # ASS/SSA style config
 
@@ -42,9 +41,31 @@ LIST_EXTRACT_LANGUAGE_ISO639 = [              # 需要提取的字幕语言的IS
     'jpn',
 ]
 
-logging.basicConfig(level=logging.INFO,
-                    format='%(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("sub_tools")
+
+
+class CustomFormatter(logging.Formatter):
+    grey = "\x1b[38;20m"
+    yellow = "\x1b[33;20m"
+    red = "\x1b[31;20m"
+    bold_red = "\x1b[31;1m"
+    green = "\x1b[32m"
+    reset = "\x1b[0m"
+    # (%(filename)s:%(lineno)d)
+    format = "%(asctime)s - %(levelname)s - %(message)s"
+
+    FORMATS = {
+        logging.DEBUG: grey + format + reset,
+        logging.INFO: green + format + reset,
+        logging.WARNING: yellow + format + reset,
+        logging.ERROR: red + format + reset,
+        logging.CRITICAL: bold_red + format + reset
+    }
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno)
+        formatter = logging.Formatter(log_fmt)
+        return formatter.format(record)
 
 
 class MergeFile:
@@ -182,6 +203,17 @@ class MergeFile:
         return mergedContent
 
 
+def initLogger():
+    logger.setLevel(logging.INFO)
+    if ARGS.debug:
+        logger.setLevel(logging.DEBUG)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.DEBUG)
+    ch.setFormatter(CustomFormatter())
+
+    logger.addHandler(ch)
+
+
 def fileOpen(input_file):
     with open(input_file, mode="rb") as f:
         enc = chardet.detect(f.read())['encoding']
@@ -216,7 +248,7 @@ def srt2ass(input_filelist, isEn=False):
     elif type(input_filelist) is list:
         input_filelist = input_filelist[0]
     if not os.path.isfile(input_filelist):
-        logger.error(f"{input_filelist} not exist")
+        logger.error(f"{input_filelist} not found")
         return
 
     logger.info(f"processing srt2ass: {input_filelist}\n")
@@ -340,28 +372,28 @@ def extractSubFromMKV(input_filelist):
         mkv = MKVFile(file)
         tracks = list(filter(lambda x: x._track_type ==
                              'subtitles', mkv.get_track()))
+        # 提取所有ass
         for track in tracks:
             if not 'SubStationAlpha' in str(track._track_codec):
                 continue
             dst_srt_path = file.replace(
                 '.mkv', f'_track{str(track._track_id)}_{track._language}.ass')
-            logger.debug(f"mkvextract:{track}")
+            logger.debug(f"MKVExtract:{track}")
             os.system(
                 f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
             updateAssStyle(dst_srt_path)
             continue
-
+        # 提取指定語言srt
         track_cnt = 0
         for track in tracks:
             if not 'SRT' in track._track_codec:
                 continue
             isEN = track._language == 'eng' or track._language == 'en'
-            # and 'SDH' in str(track.track_name)
             if not (isEN or track._language in LIST_EXTRACT_LANGUAGE_ISO639):
                 continue
             dst_srt_path = file.replace(
                 '.mkv', f'_track{track._track_id}_{track._language}.srt')
-            logger.info(track)
+            logger.debug(track)
             os.system(
                 f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
             track_cnt += 1
@@ -446,13 +478,11 @@ def getFilelist():
 
 def main():
     loadArgs()
-
-    if ARGS.debug:
-        logger.setLevel(logging.DEBUG)
-
+    initLogger()
     filelist = getFilelist()
 
     if not filelist:
+        logger.info("nothing found")
         return
 
     if ARGS.update_ass:

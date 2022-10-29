@@ -6,6 +6,7 @@ import re
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from glob import glob
+from fuzzywuzzy import fuzz
 
 import chardet
 from pymkv import MKVFile
@@ -51,8 +52,7 @@ class CustomFormatter(logging.Formatter):
     bold_red = "\x1b[31;1m"
     green = "\x1b[32m"
     reset = "\x1b[0m"
-    # (%(filename)s:%(lineno)d)
-    format = "%(asctime)s - %(levelname)s - %(message)s"
+    format = "%(asctime)s - %(levelname)s - %(message)s \n(%(filename)s:%(lineno)d)"
 
     FORMATS = {
         logging.DEBUG: grey + format + reset,
@@ -97,32 +97,34 @@ class MergeFile:
             if u'\ufeff' in tmp:
                 tmp = tmp.replace(u'\ufeff', '')
                 self.__encoding = 'utf-8'
-            cjk_character_percentage = sum(map(lambda c: '\u4e00' <= c <= '\u9fa5', tmp))/len(tmp) if cjk_character_percentage == 0 else sum(
-                map(lambda c: '\u4e00' <= c <= '\u9fa5', tmp))/len(tmp) - cjk_character_percentage
+            stripedTMP = re.sub(r'[0123456789\->:\s,.，。\?]', '', tmp)
+            cjk_character_percentage = sum(map(lambda c: '\u4e00' <= c <= '\u9fa5', stripedTMP))/len(stripedTMP) if cjk_character_percentage == 0 else sum(
+                map(lambda c: '\u4e00' <= c <= '\u9fa5', stripedTMP))/len(stripedTMP) - cjk_character_percentage
             logger.debug(f"cjk percentage in {f}: {cjk_character_percentage}")
             tmp = tmp.replace("\r", "")
             lines = [x.strip() for x in tmp.split("\n") if x.strip()]
             tmp = ''
 
             for l in lines:
-                if(re.sub(r'[0-9]+', '', l) == ''):
-                    if(not len(line)):
+                if (re.sub(r'[0-9]+', '', l) == ''):
+                    if (not len(line)):
                         line = [l]
                     else:
                         content.append(self.__process(line))
                         line = [l]
                 else:
-                    if(len(line)):
+                    if (len(line)):
                         line.append(l)
             content.append(self.__process(line))
-            if(not len(content1)):
+            if (not len(content1)):
                 content1 = content
                 content = []
 
         if cjk_character_percentage < 0:
             outputraw = self.__timeMerge(content1, content)
             global STR_2nd_STYLE
-            STR_2nd_STYLE = STR_2nd_JP_STYLE
+            if cjk_character_percentage > -0.5:
+                STR_2nd_STYLE = STR_2nd_JP_STYLE
         else:
             outputraw = self.__timeMerge(content, content1)
 
@@ -175,26 +177,26 @@ class MergeFile:
         lockType = index1 = index2 = 0
         capTime1 = capTime2 = 0
         mergedContent = []
-        while(index1 < len(c1) or index2 < len(c2)):
+        while (index1 < len(c1) or index2 < len(c2)):
             captmp = ''
-            if((not lockType == 1) and index1 < len(c1)):
+            if ((not lockType == 1) and index1 < len(c1)):
                 capTime1 = c1[index1].beginTime
-            if((not lockType == 2) and index2 < len(c2)):
+            if ((not lockType == 2) and index2 < len(c2)):
                 capTime2 = c2[index2].beginTime
             lockType = 0
-            if(capTime1 > capTime2 and capTime1 > capTime2+self.timeShift and index2 < len(c2) or index1 == len(c1)):
+            if (capTime1 > capTime2 and capTime1 > capTime2+self.timeShift and index2 < len(c2) or index1 == len(c1)):
                 lockType = 1
-            if(capTime2 > capTime1 and capTime2 > capTime1+self.timeShift and index1 < len(c1) or index2 == len(c2)):
+            if (capTime2 > capTime1 and capTime2 > capTime1+self.timeShift and index1 < len(c1) or index2 == len(c2)):
                 lockType = 2
 
-            if(not lockType == 1):
+            if (not lockType == 1):
                 captmp = c1[index1]
                 index1 += 1
-                if(lockType == 2):
+                if (lockType == 2):
                     mergedContent.append(captmp)
 
-            if(not lockType == 2):
-                if(captmp == ''):
+            if (not lockType == 2):
+                if (captmp == ''):
                     captmp = c2[index2]
                 else:
                     captmp.content.append(c2[index2].content[0])
@@ -205,8 +207,6 @@ class MergeFile:
 
 def initLogger():
     logger.setLevel(logging.INFO)
-    if ARGS.debug:
-        logger.setLevel(logging.DEBUG)
     ch = logging.StreamHandler()
     ch.setLevel(logging.DEBUG)
     ch.setFormatter(CustomFormatter())
@@ -226,22 +226,24 @@ def fileOpen(input_file):
 def merge2srt(input_filelist):
     output_filelist = []
     it = iter(input_filelist)
-    for file in it:
+    while (file := next(it, None)) is not None:
         try:
-            mergeFile = MergeFile(file, next(it))
+            file2 = next(it, None)
+            if (fuzz.ratio(file, file2) > 90):
+                mergeFile = MergeFile(file, file2)
         except:
             break
         output_file = re.sub(r'_track[0-9]+?|\.(en|zh)', '', file)
         output_file = re.sub('.srt', '_merge.srt', file)
         mergeFile.saveTo(output_file)
         output_filelist.append(output_file)
-    if(ARGS.delete):
+    if (ARGS.delete):
         removeFile(input_filelist)
     ARGS.bilingual = True
     srt2ass(output_filelist)
 
 
-def srt2ass(input_filelist, isEn=False):
+def srt2ass(input_filelist):
     if type(input_filelist) is list and len(input_filelist) > 1:
         with ThreadPoolExecutor(max_workers=17) as executor:
             return executor.map(srt2ass, input_filelist, timeout=15)
@@ -299,7 +301,7 @@ def srt2ass(input_filelist, isEn=False):
     # converter = opencc.OpenCC('s2hk.json')  # 将简中转换成繁中
     # subLines = converter.convert(subLines)
 
-    STR_STYLE = STR_EN_STYLE if ARGS.english or isEn else STR_DEFAULT_STYLE
+    STR_STYLE = STR_EN_STYLE if ARGS.english else STR_DEFAULT_STYLE
     head_str = f'''[Script Info]
 ScriptType: v4.00+
 [V4+ Styles]
@@ -316,8 +318,10 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
         r'_track[A-Za-z0-9_]*|_merge|\.(en|zh)|', '', output_file)
     with open(output_file, 'wb') as output:
         output.write(output_str)
-    if ARGS.delete or '_merge' in input_filelist:
+    if ARGS.delete:
         removeFile(input_filelist)
+    if '_merge' in input_filelist:
+        os.remove(input_filelist)
     return
 
 
@@ -447,6 +451,10 @@ def loadArgs():
                        action='store_true')
     global ARGS
     ARGS = parser.parse_args()
+
+    if ARGS.debug:
+        logger.setLevel(logging.DEBUG)
+
     logger.debug(ARGS)
 
 
@@ -477,8 +485,8 @@ def getFilelist():
 
 
 def main():
-    loadArgs()
     initLogger()
+    loadArgs()
     filelist = getFilelist()
 
     if not filelist:

@@ -7,6 +7,8 @@ from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from glob import glob
 from fuzzywuzzy import fuzz
+from fuzzywuzzy import process as fuzzProcess
+
 
 import chardet
 from pymkv import MKVFile
@@ -86,7 +88,6 @@ class MergeFile:
         cjk_character_percentage = 0
         inputfile = [self.file1, self.file2]
         for f in inputfile:
-            logger.info(f"merging: {f}")
             line = []
 
             src = fileOpen(f)
@@ -97,10 +98,12 @@ class MergeFile:
             if u'\ufeff' in tmp:
                 tmp = tmp.replace(u'\ufeff', '')
                 self.__encoding = 'utf-8'
+            # cjk字符检测，自动调整上下顺序
             stripedTMP = re.sub(r'[0123456789\->:\s,.，。\?]', '', tmp)
-            cjk_character_percentage = sum(map(lambda c: '\u4e00' <= c <= '\u9fa5', stripedTMP))/len(stripedTMP) if cjk_character_percentage == 0 else sum(
-                map(lambda c: '\u4e00' <= c <= '\u9fa5', stripedTMP))/len(stripedTMP) - cjk_character_percentage
+            cjk_character_percentage = getCJKPercentage(
+                stripedTMP) if cjk_character_percentage == 0 else getCJKPercentage(stripedTMP) - cjk_character_percentage
             logger.debug(f"cjk percentage in {f}: {cjk_character_percentage}")
+
             tmp = tmp.replace("\r", "")
             lines = [x.strip() for x in tmp.split("\n") if x.strip()]
             tmp = ''
@@ -214,6 +217,15 @@ def initLogger():
     logger.addHandler(ch)
 
 
+def getCJKPercentage(str):
+    return sum(map(lambda c: '\u4e00' <= c <= '\u9fa5', str))/len(str)
+
+
+def isBilingual(str):
+    return str.count(
+        '\n')*0.6 < str.count('\\N') or (getCJKPercentage(re.sub(r'Dialogue:(.*?,.*?,.*?,)(.*),([0-9]+,[0-9]+,[0-9]+,)|[,.?]', '', str)) > 0.4 and getCJKPercentage(re.sub(r"[a-zA-z]", '', '\n'.join(re.sub(r'Dialogue:(.*?,.*?,.*?,)(.*),(.*,.*,.*,)', '', str).split('\n')[5:]))) > 0.8)
+
+
 def fileOpen(input_file):
     with open(input_file, mode="rb") as f:
         enc = chardet.detect(f.read())['encoding']
@@ -226,20 +238,23 @@ def fileOpen(input_file):
 def merge2srt(input_filelist):
     output_filelist = []
     it = iter(input_filelist)
+    lastfile = ''
     while (file := next(it, None)) is not None:
-        try:
-            file2 = next(it, None)
-            if (fuzz.ratio(file, file2) > 90):
-                mergeFile = MergeFile(file, file2)
-        except:
-            break
+        if (fuzz.ratio(lastfile, file) > 90):
+            continue
+        lastfile = file
+        (file2, ratio) = fuzzProcess.extractBests(
+            file, input_filelist, score_cutoff=90).pop()
+        logger.debug(
+            f"fuzz.ratio of {file} & {file2} is {ratio}")
+        logger.info(f"merging: \n{file} \n& \n{file2}")
+        mergeFile = MergeFile(file, file2)
         output_file = re.sub(r'_track[0-9]+?|\.(en|zh)', '', file)
         output_file = re.sub('.srt', '_merge.srt', file)
         mergeFile.saveTo(output_file)
         output_filelist.append(output_file)
     if (ARGS.delete):
         removeFile(input_filelist)
-    ARGS.bilingual = True
     srt2ass(output_filelist)
 
 
@@ -269,7 +284,7 @@ def srt2ass(input_filelist):
     lineCount = 0
     subLines = ''
     tmpLines = ''
-    second_style = STR_2nd_STYLE if ARGS.bilingual else ''
+    second_style = STR_2nd_STYLE if isBilingual("".join(lines)) else ''
 
     for index in range(len(lines)):
         line = lines[index]
@@ -345,9 +360,9 @@ def updateAssStyle(input_filelist):
         utf8bom = u'\ufeff'
 
     STR_STYLE = STR_EN_STYLE if ARGS.english else STR_DEFAULT_STYLE
-    SECOND_LANG_STYLE = STR_2nd_STYLE.replace('\\', '\\\\') if ARGS.bilingual or tmp.count(
-        '\n')*0.8 < tmp.count('\\N') else ''
-    if SECOND_LANG_STYLE != '' and not ARGS.bilingual:
+    SECOND_LANG_STYLE = STR_2nd_STYLE.replace(
+        '\\', '\\\\') if isBilingual(tmp) else ''
+    if SECOND_LANG_STYLE != '':
         logger.info(f"detected bilingual subtitiles: {input_filelist}\n")
     output_str = re.sub(r'\[Script Info\][\s\S]*?\[Events\]', f'''[Script Info]
 ScriptType: v4.00+
@@ -402,7 +417,7 @@ def extractSubFromMKV(input_filelist):
                 f'mkvextract \"{file}\" tracks {track._track_id}:\"{dst_srt_path}\"\n')
             track_cnt += 1
         if track_cnt == 1:
-            srt2ass([dst_srt_path], isEN)
+            srt2ass([dst_srt_path])
 
 
 def removeFile(filelist):
@@ -427,9 +442,6 @@ def loadArgs():
                         action='store_true')
     parser.add_argument("-d", "--delete",
                         help="delete the original .srt file",
-                        action='store_true')
-    parser.add_argument("-b", "--bilingual",
-                        help="force handle files that contain two language",
                         action='store_true')
     parser.add_argument("-a", "--all-dir",
                         help="process all .srt/.ass including all children dir",

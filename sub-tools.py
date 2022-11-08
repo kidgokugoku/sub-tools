@@ -6,11 +6,10 @@ import re
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from glob import glob
-from fuzzywuzzy import fuzz
-from fuzzywuzzy import process as fuzzProcess
-
 
 import chardet
+from fuzzywuzzy import fuzz
+from fuzzywuzzy import process as fuzzProcess
 from pymkv import MKVFile
 
 # ASS/SSA style config
@@ -33,7 +32,7 @@ STR_2nd_STYLE = STR_2nd_EN_STYLE
 ARGS = ''
 
 # merge srt config
-INT_TIMESHIFT = 1000                        # 合并字幕时的偏移量
+INT_TIMESHIFT = 1000                        # 合并字幕时的偏移量 ms
 # iso639 code list for the language you need to extract from MKV file
 LIST_EXTRACT_LANGUAGE_ISO639 = [              # 需要提取的字幕语言的ISO639代码
     #    'en',
@@ -226,11 +225,11 @@ def isBilingual(str):
         '\n')*0.6 < str.count('\\N') or (getCJKPercentage(re.sub(r'Dialogue:(.*?,.*?,.*?,)(.*),([0-9]+,[0-9]+,[0-9]+,)|[,.?]', '', str)) > 0.4 and getCJKPercentage(re.sub(r"[a-zA-z]", '', '\n'.join(re.sub(r'Dialogue:(.*?,.*?,.*?,)(.*),(.*,.*,.*,)', '', str).split('\n')[5:]))) > 0.8)
 
 
-def fileOpen(input_file):
-    with open(input_file, mode="rb") as f:
+def fileOpen(file):
+    with open(file, mode="rb") as f:
         enc = chardet.detect(f.read())['encoding']
     tmp = ''
-    with open(input_file, mode="r", encoding=enc, errors='ignore') as fd:
+    with open(file, mode="r", encoding=enc, errors='ignore') as fd:
         tmp = fd.read()
     return [tmp, enc]
 
@@ -248,29 +247,24 @@ def merge2srt(input_filelist):
         logger.debug(
             f"fuzz.ratio of {file} & {file2} is {ratio}")
         logger.info(f"merging: \n{file} \n& \n{file2}")
-        mergeFile = MergeFile(file, file2)
+        merge_file = MergeFile(file, file2)
         output_file = re.sub(r'_track[0-9]+?|\.(en|zh)', '', file)
         output_file = re.sub('.srt', '_merge.srt', file)
-        mergeFile.saveTo(output_file)
+        merge_file.saveTo(output_file)
         output_filelist.append(output_file)
     if (ARGS.delete):
-        removeFile(input_filelist)
-    srt2ass(output_filelist)
+        removeFiles(input_filelist)
+    batchExecute(srt2ass, output_filelist)
 
 
-def srt2ass(input_filelist):
-    if type(input_filelist) is list and len(input_filelist) > 1:
-        with ThreadPoolExecutor(max_workers=17) as executor:
-            return executor.map(srt2ass, input_filelist, timeout=15)
-    elif type(input_filelist) is list:
-        input_filelist = input_filelist[0]
-    if not os.path.isfile(input_filelist):
-        logger.error(f"{input_filelist} not found")
+def srt2ass(file):
+    if not os.path.isfile(file):
+        logger.error(f"{file} not found")
         return
 
-    logger.info(f"processing srt2ass: {input_filelist}\n")
+    logger.info(f"processing srt2ass: {file}\n")
 
-    src = fileOpen(input_filelist)
+    src = fileOpen(file)
     tmpText = src[0]
     utf8bom = ''
 
@@ -279,12 +273,12 @@ def srt2ass(input_filelist):
         utf8bom = u'\ufeff'
 
     tmpText = tmpText.replace("\r", "")
+    second_style = STR_2nd_STYLE if isBilingual(tmpText) else ''
     lines = [x.strip() for x in tmpText.split("\n") if x.strip()]
     tmpText = ''
     lineCount = 0
     subLines = ''
     tmpLines = ''
-    second_style = STR_2nd_STYLE if isBilingual("".join(lines)) else ''
 
     for index in range(len(lines)):
         line = lines[index]
@@ -328,28 +322,32 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
     output_str = utf8bom + head_str + '\n' + subLines
     output_str = output_str.encode('utf-8')
 
-    output_file = '.'.join(input_filelist.split('.')[:-1]) + '.ass'
+    output_file = '.'.join(file.split('.')[:-1]) + '.ass'
     output_file = re.sub(
         r'_track[A-Za-z0-9_]*|_merge|\.(en|zh)|', '', output_file)
     with open(output_file, 'wb') as output:
         output.write(output_str)
     if ARGS.delete:
-        removeFile(input_filelist)
-    if '_merge' in input_filelist:
-        os.remove(input_filelist)
+        removeFiles(file)
+    if '_merge' in file:
+        os.remove(file)
     return
 
 
-def updateAssStyle(input_filelist):
-    if type(input_filelist) is list and len(input_filelist) > 1:
-        with ThreadPoolExecutor(max_workers=17) as executor:
-            return executor.map(updateAssStyle, input_filelist, timeout=15)
-    elif type(input_filelist) is list:
-        input_filelist = input_filelist[0]
-    logger.info(f"processing updateAssStyle: {input_filelist}\n")
+def batchExecute(func, input_filelist):
+    with ThreadPoolExecutor(max_workers=17) as executor:
+        return executor.map(func, input_filelist, timeout=15)
 
-    src = fileOpen(input_filelist)
-    output_file = input_filelist
+
+def updateAssStyle(file):
+    if not os.path.isfile(file):
+        logger.error(f"{file} not found")
+        return
+
+    logger.info(f"processing updateAssStyle: {file}\n")
+
+    src = fileOpen(file)
+    output_file = file
     tmp = src[0]
     encoding = src[1]
 
@@ -363,7 +361,7 @@ def updateAssStyle(input_filelist):
     SECOND_LANG_STYLE = STR_2nd_STYLE.replace(
         '\\', '\\\\') if isBilingual(tmp) else ''
     if SECOND_LANG_STYLE != '':
-        logger.info(f"detected bilingual subtitiles: {input_filelist}\n")
+        logger.debug(f"detected bilingual subtitiles: {file}\n")
     output_str = re.sub(r'\[Script Info\][\s\S]*?\[Events\]', f'''[Script Info]
 ScriptType: v4.00+
 [V4+ Styles]
@@ -420,7 +418,7 @@ def extractSubFromMKV(input_filelist):
             srt2ass([dst_srt_path])
 
 
-def removeFile(filelist):
+def removeFiles(filelist: list):
     if type(filelist) is list:
         for file in filelist:
             os.remove(file)
@@ -506,13 +504,13 @@ def main():
         return
 
     if ARGS.update_ass:
-        updateAssStyle(filelist)
+        batchExecute(updateAssStyle, filelist)
     elif ARGS.extract_sub:
         extractSubFromMKV(filelist)
     elif ARGS.merge_srt:
         merge2srt(filelist)
     else:
-        srt2ass(filelist)
+        batchExecute(srt2ass, filelist)
     return
 
 

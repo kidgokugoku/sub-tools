@@ -82,7 +82,7 @@ class MergeSRT:
         self.file1 = file1
         self.file2 = file2
 
-    def save(self, outputfile):
+    def save(self, filename):
         content1 = []
         content = []
         cjk_character_percentage = 0
@@ -90,13 +90,11 @@ class MergeSRT:
         logger.info(f"merging: \n{self.file1} \n& \n{self.file2}")
         for f in inputfile:
             line = []
+            tmp = read_file(f).replace("\r", "")
 
-            src = open_file(f)
-            tmp = src
             if not tmp:
                 logger.error("%s is empty", PurePath.name(f))
                 raise ValueError("empty file")
-            src = ""
             # cjk字符检测，自动调整上下顺序
             stripedTMP = re.sub(r"[0123456789\->:\s,.，。\?]", "", tmp)
             cjk_character_percentage = (
@@ -106,9 +104,7 @@ class MergeSRT:
             )
             logger.debug(f"cjk percentage in {f}: {cjk_character_percentage}")
 
-            tmp = tmp.replace("\r", "")
             lines = [x.strip() for x in tmp.split("\n") if x.strip()]
-            tmp = ""
 
             for l in lines:
                 if re.sub(r"[0-9]+", "", l) == "":
@@ -125,29 +121,27 @@ class MergeSRT:
                 content1 = content
                 content = []
 
-        if cjk_character_percentage < 0:
-            outputraw = self.__time_merge(content1, content)
-        else:
-            outputraw = self.__time_merge(content, content1)
+        output = (
+            self.__time_merge(content1, content)
+            if cjk_character_percentage < 0
+            else self.__time_merge(content, content1)
+        )
 
-        self.__save_merged_sub(outputraw, outputfile)
+        self.__save_merged_sub(output, filename)
         return
 
     def __save_merged_sub(self, raw, f):
-        # output = UTF8BOM
         output = ""
-        for i in range(len(raw)):
-            output += "%d\r\n" % (i + 1)
-            output += "%s --> %s \r\n" % (raw[i].begin, raw[i].end)
-            if type(raw[i].content) == list:
-                for c in raw[i].content:
-                    output += "%s" % c
-                    output += "\r\n"
+        for index, line in enumerate(raw):
+            output += f"{index + 1}\r\n"
+            output += f"{line.begin} --> {line.end} \r\n"
+            if type(line.content) == list:
+                for c in line.content:
+                    output += f"{c} \r\n"
             else:
-                output += "%s" % raw[i].content
+                output += line.content
                 output += "\r\n"
-        output = output.encode("utf-8")
-        Path(f).write_bytes(output)
+        Path(f).write_bytes(output.encode("utf-8"))
         return
 
     def __time(self, rawtime):
@@ -251,7 +245,7 @@ def is_bilingual(str):
     )
 
 
-def launguage_detect(str):
+def get_style(str):
     return (
         STR_JP_STYLE
         if sum(map(lambda c: "\u3040" <= c <= "\u30ff", str))
@@ -261,7 +255,7 @@ def launguage_detect(str):
     )
 
 
-def second_language_detect(str):
+def get_2nd_style(str):
     return (
         STR_2ND_JP_STYLE
         if sum(map(lambda c: "\u3040" <= c <= "\u30ff", str))
@@ -271,16 +265,14 @@ def second_language_detect(str):
     )
 
 
-def open_file(file):
+def read_file(file):
     enc = chardet.detect(Path(file).read_bytes())["encoding"]
     return Path(file).read_text(encoding=enc, errors="ignore")
 
 
-def merge_SRTs(input_file_list):
-    output_file_list = []
-    it = iter(input_file_list)
-    file_groups = []
-    file_group = []
+def merge_SRTs(files):
+    output_file_list = file_groups = file_group = []
+    it = iter(files)
     last_file = ""
     while (file := next(it, None)) is not None:
         if not last_file:
@@ -288,10 +280,10 @@ def merge_SRTs(input_file_list):
             file_group.append(file)
             continue
 
-        if PurePath.name(file).rsplit("_", 2)[0] == PurePath.name(last_file).rsplit(
-            "_", 2
-        )[0] or re.sub(r"\.\S{0,3}\..*?$", "", PurePath.name(file)) == re.sub(
-            r"\.\S{0,3}\..*?$", "", PurePath.name(file)
+        if (
+            PurePath.name(file).rsplit("_", 2)[0]
+            == PurePath.name(last_file).rsplit("_", 2)[0]
+            or Path(file).stem == Path(last_file).stem
         ):
             file_group.append(file)
         else:
@@ -310,9 +302,8 @@ def merge_SRTs(input_file_list):
             ):
                 logger.debug(f"{file1} \n&\n {file2} are same language")
                 continue
-            # file_track1_eng.srt --> track1_eng.srt
-            # file_track2_chi.srt --> file_track2_chi_track1_eng.srt
-            output_file = f'{file2.rsplit(".",1)[0]}_{file1.split("_", 1)[-1]}'
+            # file_track2_chi_track1_eng.srt
+            output_file = f'{Path(file2).with_suffix()}_{file1.split("_", 1)[-1]}'
 
             file = Path(output_file.split("_")[-1])
             if not (
@@ -351,19 +342,16 @@ def SRT_to_ASS(file):
 
     logger.info(f"srt2ass: {PurePath.name(file)}\n")
 
-    src = open_file(file)
-    tmpText = src
+    tmpText = read_file(file)
 
     tmpText = tmpText.replace("\r", "")
-    second_style = second_language_detect(tmpText)
+    second_style = get_2nd_style(tmpText)
     lines = [x.strip() for x in tmpText.split("\n") if x.strip()]
-    tmpText = ""
     lineCount = 0
     subLines = ""
     tmpLines = ""
 
-    for index in range(len(lines)):
-        line = lines[index]
+    for index, line in enumerate(lines):
         if line.isdigit() and re.match("-?\d+:\d\d:\d\d", lines[(index + 1)]):
             if tmpLines:
                 subLines += tmpLines + "\n"
@@ -375,11 +363,10 @@ def SRT_to_ASS(file):
             tmpLines += f"Dialogue: 0,{line},Default,,0,0,0,,"
         elif lineCount < 2:
             tmpLines += "{\\blur3}" + line
+        elif get_CJK_percentage(line) != 0:
+            tmpLines += "\\N" + line
         else:
-            if get_CJK_percentage(line) != 0:
-                tmpLines += "\\N" + line
-            else:
-                tmpLines += "\\N" + second_style + line
+            tmpLines += "\\N" + second_style + line
         lineCount += 1
     subLines += "{\\blur3}" + tmpLines + "\r\n"
     # timestamp replace
@@ -391,25 +378,22 @@ def SRT_to_ASS(file):
     subLines = re.sub(r'<font\s+color="?(\w*?)"?>', "", subLines)
     subLines = re.sub(r"</font>", "", subLines)
 
-    style = launguage_detect(subLines)
-    head_str = f"""[Script Info]
+    output_str = f"""[Script Info]
 ScriptType: v4.00+
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-{style}
+{get_style(subLines)}
 [Events]
-Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text"""
+Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
+{subLines}"""
 
-    output_str = head_str + "\n" + subLines
-    output_str = output_str.encode("utf-8")
-
-    Path(output_file).write_bytes(output_str)
+    Path(output_file).write_bytes(output_str.encode("utf-8"))
     return
 
 
-def batch_execute(func, input_file_list):
+def batch_execute(func, files):
     with ThreadPoolExecutor(max_workers=17) as executor:
-        return executor.map(func, input_file_list, timeout=15)
+        return executor.map(func, files, timeout=15)
 
 
 def update_ASS_style(file):
@@ -419,12 +403,11 @@ def update_ASS_style(file):
 
     logger.info(f"updateAssStyle: {PurePath.name(file)}\n")
 
-    src = open_file(file)
-    tmp = src
+    tmp = read_file(file)
 
-    style = launguage_detect(tmp)
+    style = get_style(tmp)
     if is_bilingual(tmp):
-        SECOND_LANG_STYLE = second_language_detect(tmp)
+        second_style = get_2nd_style(tmp)
         logger.debug(f"detected bilingual subtitiles: {PurePath.name(file)}\n")
 
     output_str = re.sub(
@@ -440,21 +423,19 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
     )
     output_str = re.sub(r",\{\\fn(.*?)\}", ",", output_str)
     output_str = re.sub(r"\{\\r\}", "", output_str)
-    output_str = re.sub(r"\\N(\{.*?\})?", rf"\\N{SECOND_LANG_STYLE}", output_str)  # 英文行
+    output_str = re.sub(r"\\N(\{.*?\})?", rf"\\N{second_style}", output_str)  # 英文行
     output_str = re.sub(
         r"Dialogue:(.*?,.*?,.*?,)(.*),([0-9]+,[0-9]+,[0-9]+,.*?,)",
         r"Dialogue:\1Default,,\3{\\blur3}",
         output_str,
     )  # 默认字体
 
-    output_str = output_str.encode("utf-8")
-
-    Path(file).write_bytes(output_str)
+    Path(file).write_bytes(output_str.encode("utf-8"))
     return
 
 
-def extract_subs_MKV(input_file_list):
-    for file in input_file_list:
+def extract_subs_MKV(files):
+    for file in files:
         output_file_list = []
         logger.info(f"extracting: {PurePath.name(file)}")
         mkv = MKVFile(file)
@@ -476,7 +457,6 @@ def extract_subs_MKV(input_file_list):
                 f'mkvextract "{file}" tracks {track._track_id}:"{dst_srt_path}"\n'
             )
             update_ASS_style(dst_srt_path)
-            continue
         # 提取指定語言srt
         track_cnt = 0
         for track in tracks:
@@ -487,7 +467,7 @@ def extract_subs_MKV(input_file_list):
             dst_srt_path = file.replace(
                 ".mkv", f"_track{track._track_id}_{track._language}.srt"
             )
-            logger.debug(track)
+            logger.debug(f"MKVExtract:{track}")
             subprocess.run(
                 f'mkvextract "{file}" tracks {track._track_id}:"{dst_srt_path}"\n'
             )
@@ -508,7 +488,7 @@ def load_args():
     )
     parser.add_argument(
         "-r",
-        "--receusive",
+        "--recursive",
         help="process all .srt/.ass",
         action="store_true",
     )
@@ -575,20 +555,20 @@ def get_file_list():
 def main():
     init_logger()
     load_args()
-    file_list = get_file_list()
+    files = get_file_list()
 
-    if not file_list:
+    if not files:
         logger.info("nothing found")
         return
 
     if ARGS.update_ass:
-        batch_execute(update_ASS_style, file_list)
+        batch_execute(update_ASS_style, files)
     elif ARGS.extract_sub:
-        extract_subs_MKV(file_list)
+        extract_subs_MKV(files)
     elif ARGS.merge_srt:
-        merge_SRTs(file_list)
+        merge_SRTs(files)
     else:
-        batch_execute(SRT_to_ASS, file_list)
+        batch_execute(SRT_to_ASS, files)
     return
 
 

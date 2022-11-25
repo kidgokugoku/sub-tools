@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 import argparse
 import logging
-import os
 import re
+import subprocess
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
-from glob import glob
 from itertools import combinations
+from pathlib import Path, PurePath
 
 import chardet
 from pymkv import MKVFile
@@ -14,18 +14,17 @@ from pymkv import MKVFile
 # ASS/SSA style config
 
 # Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-STR_DEFAULT_STYLE = """Style: Default,思源宋体 Heavy,28,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0.1,0,1,1,3,2,10,10,15,1
-Style: EN,GenYoMin TW B,11,&H003CA8DC,&H000000FF,&H00000000,&H00000000,1,0,0,0,90,100,0,0,1,1,2,2,10,10,10,1
-Style: JP,GenYoMin JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,2,2,10,10,10,1"""
+STR_DEFAULT_STYLE = """Style: Default,思源宋体 Heavy,28,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0.1,0,1,1,3,2,30,30,15,1
+Style: EN,GenYoMin TW B,11,&H003CA8DC,&H000000FF,&H00000000,&H00000000,1,0,0,0,90,100,0,0,1,1,2,2,30,30,10,1
+Style: JP,GenYoMin JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,2,2,30,30,10,1"""
 
 STR_2ND_EN_STYLE = "{\\rEN\\blur3}"
 STR_2ND_JP_STYLE = "{\\rJP\\blur3}"
 
-STR_2ND_STYLE = STR_2ND_EN_STYLE
 
-STR_CN_STYLE = "Style: Default,GenYoMin TW B,23,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0,0,1,1,3,2,10,10,10,1"
-STR_EN_STYLE = "Style: Default,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.3,3,2,10,10,20,1"
-STR_JP_STYLE = "Style: Default,GenYoMin JP B,23,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0.1,2,2,10,10,10,1"
+STR_CN_STYLE = "Style: Default,GenYoMin TW B,23,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0,0,1,1,3,2,30,30,10,1"
+STR_EN_STYLE = "Style: Default,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.3,3,2,30,30,20,1"
+STR_JP_STYLE = "Style: Default,GenYoMin JP B,23,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0.1,2,2,30,30,10,1"
 """STR_XX_STYLE .ass文件的XX语言配置
 
 STR_DEFAULT_STYLE 是srt转换ass时的默认样式, 可以通过 Aegisub 自己调整合适后，用文本方式打开字幕复制粘贴过来。
@@ -78,7 +77,6 @@ class MergeSRT:
     sub = namedtuple("sub", "begin, end, content,beginTime,endTime")
     subEx = namedtuple("sub", "begin, end, content")
     timeShift = INT_TIMESHIFT  # ms
-    __encoding = ""
 
     def __init__(self, file1, file2) -> None:
         self.file1 = file1
@@ -94,16 +92,11 @@ class MergeSRT:
             line = []
 
             src = open_file(f)
-            tmp = src[0]
+            tmp = src
             if not tmp:
-                logger.error("%s is empty", os.path.basename(f))
+                logger.error("%s is empty", PurePath.name(f))
                 raise ValueError("empty file")
-            if not self.__encoding:
-                self.__encoding = "utf-8"
             src = ""
-            if "\ufeff" in tmp:
-                tmp = tmp.replace("\ufeff", "")
-                self.__encoding = "utf-8"
             # cjk字符检测，自动调整上下顺序
             stripedTMP = re.sub(r"[0123456789\->:\s,.，。\?]", "", tmp)
             cjk_character_percentage = (
@@ -134,9 +127,6 @@ class MergeSRT:
 
         if cjk_character_percentage < 0:
             outputraw = self.__time_merge(content1, content)
-            global STR_2ND_STYLE
-            if cjk_character_percentage > -0.5:
-                STR_2ND_STYLE = STR_2ND_JP_STYLE
         else:
             outputraw = self.__time_merge(content, content1)
 
@@ -156,9 +146,8 @@ class MergeSRT:
             else:
                 output += "%s" % raw[i].content
                 output += "\r\n"
-        output = output.encode(self.__encoding)
-        with open(f, "wb") as output_file:
-            output_file.write(output)
+        output = output.encode("utf-8")
+        Path(f).write_bytes(output)
         return
 
     def __time(self, rawtime):
@@ -224,7 +213,7 @@ class MergeSRT:
         return mergedContent
 
 
-def initLogger():
+def init_logger():
     logger.setLevel(logging.INFO)
     ch = logging.StreamHandler()
     ch.setLevel(logging.DEBUG)
@@ -240,16 +229,16 @@ def get_CJK_percentage(str):
 
 
 def is_bilingual(str):
-    return str.count("\n") * 0.6 < str.count("\\N") or (
+    return str.count("\n") * 0.6 < str.count("\\N") or 0.98 > (  # 字幕总行数的 60% 都有第二行
         get_CJK_percentage(
             re.sub(
                 r"Dialogue:(.*?,.*?,.*?,)(.*),(.*,.*,.*,)|[0-9,.?:->\-!\s\'♪：]", "", str
             )
         )
-        > 0.2
+        > 0.2  # 字幕内容 CJK字符比例大于 20%
         and get_CJK_percentage(
             re.sub(
-                r"[a-zA-z]",
+                r"[a-zA-z]",  # 字幕内容除字母外 CJK字符比例大于 60%
                 "",
                 re.sub(
                     r"Dialogue:(.*?,.*?,.*?,)(.*),(.*,.*,.*,)|[0-9,.?:->\-!\s\'♪：]",
@@ -262,84 +251,111 @@ def is_bilingual(str):
     )
 
 
+def launguage_detect(str):
+    return (
+        STR_JP_STYLE
+        if sum(map(lambda c: "\u3040" <= c <= "\u30ff", str))
+        else STR_EN_STYLE
+        if get_CJK_percentage(str) < 0.05
+        else STR_DEFAULT_STYLE
+    )
+
+
+def second_language_detect(str):
+    return (
+        STR_2ND_JP_STYLE
+        if sum(map(lambda c: "\u3040" <= c <= "\u30ff", str))
+        else STR_2ND_EN_STYLE
+        if get_CJK_percentage(str) > 0.05
+        else None
+    )
+
+
 def open_file(file):
-    with open(file, mode="rb") as f:
-        enc = chardet.detect(f.read())["encoding"]
-    tmp = ""
-    with open(file, mode="r", encoding=enc, errors="ignore") as fd:
-        tmp = fd.read()
-    return [tmp, enc]
+    enc = chardet.detect(Path(file).read_bytes())["encoding"]
+    return Path(file).read_text(encoding=enc, errors="ignore")
 
 
-def merge_SRTs(input_filelist):
-    output_filelist = []
-    it = iter(input_filelist)
+def merge_SRTs(input_file_list):
+    output_file_list = []
+    it = iter(input_file_list)
     file_groups = []
     file_group = []
-    last = ""
+    last_file = ""
     while (file := next(it, None)) is not None:
-        if not last:
-            last = file
-            file_group = [file]
+        if not last_file:
+            last_file = file
+            file_group.append(file)
             continue
-        if os.path.basename(file).split("_")[0] == os.path.basename(last).split("_")[0]:
+
+        if PurePath.name(file).rsplit("_", 2)[0] == PurePath.name(last_file).rsplit(
+            "_", 2
+        )[0] or re.sub(r"\.\S{0,3}\..*?$", "", PurePath.name(file)) == re.sub(
+            r"\.\S{0,3}\..*?$", "", PurePath.name(file)
+        ):
             file_group.append(file)
         else:
             file_groups.append(file_group)
-            last = file
-            file_group = [file]
+            last_file = file
+            file_group.append(file)
     file_groups.append(file_group)
     logger.debug(file_groups)
     for g in file_groups:
         for file1, file2 in combinations(g, 2):
             if (
-                os.path.basename(file1).split("_")[-1]
-                == os.path.basename(file2).split("_")[-1]
+                "_" in file1
+                and "_" in file2
+                and PurePath.name(file1).split("_")[-1]
+                == PurePath.name(file2).split("_")[-1]
             ):
+                logger.debug(f"{file1} \n&\n {file2} are same language")
                 continue
             # file_track1_eng.srt --> track1_eng.srt
-            surfix = "_".join(file1.split("_")[1:])
-            output_file = "_".join([file2.replace(".srt", ""), surfix]) + ".srt"
+            # file_track2_chi.srt --> file_track2_chi_track1_eng.srt
+            output_file = f'{file2.rsplit(".",1)[0]}_{file1.split("_", 1)[-1]}'
 
-            output_file = (
-                "_".join(output_file.split("_")[:-4]) + ".srt"
-                if not os.path.isfile("_".join(output_file.split("_")[:-4]) + ".ass")
-                else output_file
-            )
+            file = Path(output_file.split("_")[-1])
+            if not (
+                Path.is_file(file.with_suffix(".ass"))
+                or Path.is_file(file.with_suffix(".srt"))
+            ):
+                output_file = file.with_suffix(".srt")
 
-            if os.path.isfile(output_file):
+            if Path.is_file(output_file):
                 if not ARGS.force:
                     logger.info(f"{output_file} exist, skipping")
                     continue
                 logger.info(f"{output_file} exist, overwriting")
-
             try:
                 MergeSRT(file1, file2).save(output_file)
             except ValueError:
-                logger.info(f"skipped {os.path.basename(file)}")
+                logger.info(f"skipped {PurePath.name(file)}")
                 continue
-            output_filelist.append(output_file)
+            output_file_list.append(output_file)
 
-    batch_execute(SRT_to_ASS, output_filelist)
+    batch_execute(SRT_to_ASS, output_file_list)
 
 
 def SRT_to_ASS(file):
-    if not os.path.isfile(file):
-        logger.error(f"{os.path.basename(file)} not found")
+    if not Path.is_file(file):
+        logger.error(f"{PurePath.name(file)} not found")
         return
 
-    logger.info(f"srt2ass: {os.path.basename(file)}\n")
+    output_file = Path(file).with_suffix(".ass")
+
+    if Path.is_file(output_file):
+        if not ARGS.force:
+            logger.info(f"{output_file} exist")
+            return
+        logger.info(f"{output_file} exist, overwriting")
+
+    logger.info(f"srt2ass: {PurePath.name(file)}\n")
 
     src = open_file(file)
-    tmpText = src[0]
-    utf8bom = ""
-
-    if "\ufeff" in tmpText:
-        tmpText = tmpText.replace("\ufeff", "")
-        utf8bom = "\ufeff"
+    tmpText = src
 
     tmpText = tmpText.replace("\r", "")
-    second_style = STR_2ND_STYLE if is_bilingual(tmpText) else ""
+    second_style = second_language_detect(tmpText)
     lines = [x.strip() for x in tmpText.split("\n") if x.strip()]
     tmpText = ""
     lineCount = 0
@@ -358,9 +374,12 @@ def SRT_to_ASS(file):
             line = line.replace("-0", "0")
             tmpLines += f"Dialogue: 0,{line},Default,,0,0,0,,"
         elif lineCount < 2:
-            tmpLines += line
+            tmpLines += "{\\blur3}" + line
         else:
-            tmpLines += "\\N" + second_style + line
+            if get_CJK_percentage(line) != 0:
+                tmpLines += "\\N" + line
+            else:
+                tmpLines += "\\N" + second_style + line
         lineCount += 1
     subLines += "{\\blur3}" + tmpLines + "\r\n"
     # timestamp replace
@@ -372,59 +391,49 @@ def SRT_to_ASS(file):
     subLines = re.sub(r'<font\s+color="?(\w*?)"?>', "", subLines)
     subLines = re.sub(r"</font>", "", subLines)
 
-    STR_STYLE = STR_EN_STYLE if ARGS.english else STR_DEFAULT_STYLE
+    style = launguage_detect(subLines)
     head_str = f"""[Script Info]
 ScriptType: v4.00+
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-{STR_STYLE}
+{style}
 [Events]
 Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text"""
 
-    output_str = utf8bom + head_str + "\n" + subLines
+    output_str = head_str + "\n" + subLines
     output_str = output_str.encode("utf-8")
 
-    output_file = ".".join(file.split(".")[:-1]) + ".ass"
-
-    if os.path.isfile(output_file):
-        if not ARGS.force:
-            logger.info(f"{output_file} exist")
-            return
-        logger.info(f"{output_file} exist, overwriting")
-
-    with open(output_file, "wb") as output:
-        output.write(output_str)
+    Path(output_file).write_bytes(output_str)
     return
 
 
-def batch_execute(func, input_filelist):
+def batch_execute(func, input_file_list):
     with ThreadPoolExecutor(max_workers=17) as executor:
-        return executor.map(func, input_filelist, timeout=15)
+        return executor.map(func, input_file_list, timeout=15)
 
 
 def update_ASS_style(file):
-    if not os.path.isfile(file):
-        logger.error(f"{os.path.basename(file)} not found")
+    if not Path.is_file(file):
+        logger.error(f"{PurePath.name(file)} not found")
         return
 
-    logger.info(f"updateAssStyle: {os.path.basename(file)}\n")
+    logger.info(f"updateAssStyle: {PurePath.name(file)}\n")
 
     src = open_file(file)
-    output_file = file
-    tmp = src[0]
-    encoding = src[1]
+    tmp = src
 
-    STR_STYLE = STR_EN_STYLE if ARGS.english else STR_DEFAULT_STYLE
-    SECOND_LANG_STYLE = STR_2ND_STYLE.replace("\\", "\\\\") if is_bilingual(tmp) else ""
-    if SECOND_LANG_STYLE != "":
-        logger.debug(f"detected bilingual subtitiles: {os.path.basename(file)}\n")
+    style = launguage_detect(tmp)
+    if is_bilingual(tmp):
+        SECOND_LANG_STYLE = second_language_detect(tmp)
+        logger.debug(f"detected bilingual subtitiles: {PurePath.name(file)}\n")
+
     output_str = re.sub(
         r"\[Script Info\][\s\S]*?\[Events\]",
         f"""[Script Info]
 ScriptType: v4.00+
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-{STR_STYLE}
+{style}
 [Events]""",
         tmp,
         1,
@@ -438,19 +447,18 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
         output_str,
     )  # 默认字体
 
-    output_str = output_str.encode(encoding)
+    output_str = output_str.encode("utf-8")
 
-    with open(output_file, "wb") as output:
-        output.write(output_str)
+    Path(file).write_bytes(output_str)
     return
 
 
-def extract_subs_MKV(input_filelist):
-    for file in input_filelist:
-        output_filelist = []
-        logger.info(f"extracting: {os.path.basename(file)}")
+def extract_subs_MKV(input_file_list):
+    for file in input_file_list:
+        output_file_list = []
+        logger.info(f"extracting: {PurePath.name(file)}")
         mkv = MKVFile(file)
-        tracks = list(filter(lambda x: x._track_type == "subtitles", mkv.get_track()))
+        tracks = [x for x in mkv.get_track() if x._track_type == "subtitles"]
         logger.debug(tracks)
         # 提取所有ass
         for track in tracks:
@@ -459,13 +467,13 @@ def extract_subs_MKV(input_filelist):
             dst_srt_path = file.replace(
                 ".mkv", f"_track{str(track._track_id)}_{track._language}.ass"
             )
-            if os.path.isfile(dst_srt_path):
+            if Path.is_file(dst_srt_path):
                 if not ARGS.force:
                     continue
                 logger.info(f"{dst_srt_path} exist, overwriting")
             logger.debug(f"MKVExtract:{track}")
-            os.system(
-                f'mkvextract "{os.path.basename(file)}" tracks {track._track_id}:"{dst_srt_path}"\n'
+            subprocess.run(
+                f'mkvextract "{file}" tracks {track._track_id}:"{dst_srt_path}"\n'
             )
             update_ASS_style(dst_srt_path)
             continue
@@ -480,14 +488,14 @@ def extract_subs_MKV(input_filelist):
                 ".mkv", f"_track{track._track_id}_{track._language}.srt"
             )
             logger.debug(track)
-            os.system(
-                f'mkvextract "{os.path.basename(file)}" tracks {track._track_id}:"{dst_srt_path}"\n'
+            subprocess.run(
+                f'mkvextract "{file}" tracks {track._track_id}:"{dst_srt_path}"\n'
             )
             track_cnt += 1
-            output_filelist.append(dst_srt_path)
+            output_file_list.append(dst_srt_path)
         if track_cnt == 1:
             SRT_to_ASS(dst_srt_path)
-        merge_SRTs(output_filelist)
+        merge_SRTs(output_file_list)
 
 
 def load_args():
@@ -499,18 +507,9 @@ def load_args():
         default=".",
     )
     parser.add_argument(
-        "--english",
-        "-en",
-        help="handle file that contian only ENG subtitles",
-        action="store_true",
-    )
-    parser.add_argument(
-        "-d", "--delete", help="delete the original .srt file", action="store_true"
-    )
-    parser.add_argument(
-        "-a",
-        "--all-dir",
-        help="process all .srt/.ass including all children dir",
+        "-r",
+        "--receusive",
+        help="process all .srt/.ass",
         action="store_true",
     )
     parser.add_argument(
@@ -519,8 +518,12 @@ def load_args():
         help="force operation and overwrite existing files",
         action="store_true",
     )
-    parser.add_argument("--debug", help="print debug level log", action="store_true")
-
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="show debug info",
+    )
     group = parser.add_mutually_exclusive_group()
 
     group.add_argument(
@@ -533,64 +536,59 @@ def load_args():
     global ARGS
     ARGS = parser.parse_args()
 
-    if ARGS.debug:
+    if ARGS.verbose:
         logger.setLevel(logging.DEBUG)
 
     logger.debug(ARGS)
 
 
-def get_filelist():
+def get_file_list():
     file = ARGS.file
 
-    filelist = []
+    file_list = []
 
     if type(file) is list:
-        filelist += file
+        file_list = file
     else:
-        filelist.append(file)
+        file_list.append(file)
 
-    for arg in filelist:
-        if ARGS.all_dir and os.path.isdir(arg):
-            for home, dirs, files in os.walk(arg):
-                for dir in dirs:
-                    filelist.append(os.path.join(home, dir))
+    for arg in file_list:
+        if ARGS.recursive and Path.is_dir(arg):
+            dirs = [x for x in Path(arg).glob("**") if Path.is_dir(x)]
+            file_list += dirs
         if ARGS.update_ass:
-            filelist += glob(os.path.join(arg, "*.ass"))
+            file_list += Path(arg).glob("*.ass")
         elif ARGS.extract_sub:
-            filelist += glob(os.path.join(arg, "*.mkv"))
-            filelist = list(
-                filter(
-                    lambda x: not os.path.isfile(re.sub(r"\.mkv", ".ass", x)), filelist
-                )
-            )
+            file_list += Path(arg).glob("*.mkv")
+            file_list = [
+                x for x in file_list if not Path.is_file(Path(x).with_suffix(".ass"))
+            ]
         else:
-            filelist += glob(os.path.join(arg, "*.srt"))
-            # filelist = list(filter(lambda x: not os.path.isfile(
-            #     re.sub(r'\.mkv', '.ass', x)), filelist))
+            file_list += Path(arg).glob("*.srt")
 
-    filelist = list(filter(lambda x: os.path.isfile(x), filelist))
+    file_list = [x for x in file_list if Path.is_file(x)]
 
-    logger.debug(filelist)
-    return filelist
+    logger.debug(file_list)
+    return file_list
 
 
 def main():
-    initLogger()
+    init_logger()
     load_args()
-    filelist = get_filelist()
+    file_list = get_file_list()
 
-    if not filelist:
+    if not file_list:
         logger.info("nothing found")
         return
 
     if ARGS.update_ass:
-        batch_execute(update_ASS_style, filelist)
+        batch_execute(update_ASS_style, file_list)
     elif ARGS.extract_sub:
-        extract_subs_MKV(filelist)
+        extract_subs_MKV(file_list)
     elif ARGS.merge_srt:
-        merge_SRTs(filelist)
+        merge_SRTs(file_list)
     else:
-        batch_execute(SRT_to_ASS, filelist)
+        batch_execute(SRT_to_ASS, file_list)
     return
 
 

@@ -6,7 +6,7 @@ import subprocess
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from itertools import combinations
-from pathlib import Path, PurePath
+from pathlib import Path
 
 import chardet
 from pymkv import MKVFile
@@ -93,7 +93,7 @@ class MergeSRT:
             tmp = read_file(f).replace("\r", "")
 
             if not tmp:
-                logger.error("%s is empty", PurePath.name(f))
+                logger.error("%s is empty", Path(f).name)
                 raise ValueError("empty file")
             # cjk字符检测，自动调整上下顺序
             stripedTMP = re.sub(r"[0123456789\->:\s,.，。\?]", "", tmp)
@@ -261,17 +261,18 @@ def get_2nd_style(str):
         if sum(map(lambda c: "\u3040" <= c <= "\u30ff", str))
         else STR_2ND_EN_STYLE
         if get_CJK_percentage(str) > 0.05
-        else None
+        else ""
     )
 
 
-def read_file(file):
-    enc = chardet.detect(Path(file).read_bytes())["encoding"]
-    return Path(file).read_text(encoding=enc, errors="ignore")
+def read_file(file: Path):
+    return file.read_text(encoding=chardet.detect(file.read_bytes())["encoding"])
 
 
-def merge_SRTs(files):
-    output_file_list = file_groups = file_group = []
+def merge_SRTs(files: list[Path]):
+    output_file_list = []
+    file_groups = []
+    file_group = []
     it = iter(files)
     last_file = ""
     while (file := next(it, None)) is not None:
@@ -279,11 +280,9 @@ def merge_SRTs(files):
             last_file = file
             file_group.append(file)
             continue
-
         if (
-            PurePath.name(file).rsplit("_", 2)[0]
-            == PurePath.name(last_file).rsplit("_", 2)[0]
-            or Path(file).stem == Path(last_file).stem
+            file.name.rsplit("_", 2)[0] == last_file.name.rsplit("_", 2)[0]
+            or file.stem == last_file.stem
         ):
             file_group.append(file)
         else:
@@ -297,13 +296,12 @@ def merge_SRTs(files):
             if (
                 "_" in file1
                 and "_" in file2
-                and PurePath.name(file1).split("_")[-1]
-                == PurePath.name(file2).split("_")[-1]
+                and file1.name.split("_")[-1] == file2.name.split("_")[-1]
             ):
                 logger.debug(f"{file1} \n&\n {file2} are same language")
                 continue
             # file_track2_chi_track1_eng.srt
-            output_file = f'{Path(file2).with_suffix()}_{file1.split("_", 1)[-1]}'
+            output_file = f'{file2.with_suffix("")}_{file1.split("_", 1)[-1]}'
 
             file = Path(output_file.split("_")[-1])
             if not (
@@ -320,53 +318,51 @@ def merge_SRTs(files):
             try:
                 MergeSRT(file1, file2).save(output_file)
             except ValueError:
-                logger.info(f"skipped {PurePath.name(file)}")
+                logger.info(f"skipped {file.name}")
                 continue
             output_file_list.append(output_file)
 
     batch_execute(SRT_to_ASS, output_file_list)
 
 
-def SRT_to_ASS(file):
-    if not Path.is_file(file):
-        logger.error(f"{PurePath.name(file)} not found")
-        return
+def SRT_to_ASS(file: Path):
+    output_file = file.with_suffix(".ass")
 
-    output_file = Path(file).with_suffix(".ass")
-
-    if Path.is_file(output_file):
+    if output_file.is_file():
         if not ARGS.force:
             logger.info(f"{output_file} exist")
             return
         logger.info(f"{output_file} exist, overwriting")
 
-    logger.info(f"srt2ass: {PurePath.name(file)}\n")
+    logger.info(f"srt2ass: {file.stem}\n")
 
-    tmpText = read_file(file)
+    tmpText = read_file(file).replace("\r", "")
 
-    tmpText = tmpText.replace("\r", "")
     second_style = get_2nd_style(tmpText)
     lines = [x.strip() for x in tmpText.split("\n") if x.strip()]
+    logger.info(enumerate(lines))
+
     lineCount = 0
     subLines = ""
     tmpLines = ""
 
     for index, line in enumerate(lines):
-        if line.isdigit() and re.match("-?\d+:\d\d:\d\d", lines[(index + 1)]):
+        if line.isdigit() and re.match(r"-?\d+:\d\d:\d\d", lines[index + 1]):
             if tmpLines:
                 subLines += tmpLines + "\n"
             tmpLines = ""
             lineCount = 0
             continue
-        elif re.match("-?\d+:\d\d:\d\d", line):
+        elif re.match(r"-?\d+:\d\d:\d\d", line):
             line = line.replace("-0", "0")
             tmpLines += f"Dialogue: 0,{line},Default,,0,0,0,,"
         elif lineCount < 2:
             tmpLines += "{\\blur3}" + line
-        elif get_CJK_percentage(line) != 0:
-            tmpLines += "\\N" + line
         else:
-            tmpLines += "\\N" + second_style + line
+            if get_CJK_percentage(line) != 0:
+                tmpLines += "\\N" + line
+            else:
+                tmpLines += "\\N" + second_style + line
         lineCount += 1
     subLines += "{\\blur3}" + tmpLines + "\r\n"
     # timestamp replace
@@ -387,7 +383,7 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
 {subLines}"""
 
-    Path(output_file).write_bytes(output_str.encode("utf-8"))
+    output_file.write_bytes(output_str.encode("utf-8"))
     return
 
 
@@ -396,19 +392,16 @@ def batch_execute(func, files):
         return executor.map(func, files, timeout=15)
 
 
-def update_ASS_style(file):
-    if not Path.is_file(file):
-        logger.error(f"{PurePath.name(file)} not found")
-        return
-
-    logger.info(f"updateAssStyle: {PurePath.name(file)}\n")
+def update_ASS_style(file: Path):
+    logger.info(f"updateAssStyle: {file.name}\n")
 
     tmp = read_file(file)
 
     style = get_style(tmp)
+    second_style = ""
     if is_bilingual(tmp):
         second_style = get_2nd_style(tmp)
-        logger.debug(f"detected bilingual subtitiles: {PurePath.name(file)}\n")
+        logger.debug(f"detected bilingual subtitiles: {file.name}\n")
 
     output_str = re.sub(
         r"\[Script Info\][\s\S]*?\[Events\]",
@@ -430,14 +423,14 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
         output_str,
     )  # 默认字体
 
-    Path(file).write_bytes(output_str.encode("utf-8"))
+    file.write_bytes(output_str.encode("utf-8"))
     return
 
 
-def extract_subs_MKV(files):
+def extract_subs_MKV(files: list[Path]):
     for file in files:
         output_file_list = []
-        logger.info(f"extracting: {PurePath.name(file)}")
+        logger.info(f"extracting: {file.name}")
         mkv = MKVFile(file)
         tracks = [x for x in mkv.get_track() if x._track_type == "subtitles"]
         logger.debug(tracks)
@@ -523,28 +516,22 @@ def load_args():
 
 
 def get_file_list():
-    file = ARGS.file
 
-    file_list = []
-
-    if type(file) is list:
-        file_list = file
-    else:
-        file_list.append(file)
+    file_list = [Path(x).resolve() for x in ARGS.file]
 
     for arg in file_list:
-        if ARGS.recursive and Path.is_dir(arg):
-            dirs = [x for x in Path(arg).glob("**") if Path.is_dir(x)]
+        if ARGS.recursive and arg.is_dir():
+            dirs = [x for x in arg.glob("**") if Path.is_dir(x)]
             file_list += dirs
         if ARGS.update_ass:
-            file_list += Path(arg).glob("*.ass")
+            file_list += arg.glob("*.ass")
         elif ARGS.extract_sub:
-            file_list += Path(arg).glob("*.mkv")
+            file_list += arg.glob("*.mkv")
             file_list = [
                 x for x in file_list if not Path.is_file(Path(x).with_suffix(".ass"))
             ]
         else:
-            file_list += Path(arg).glob("*.srt")
+            file_list += arg.glob("*.srt")
 
     file_list = [x for x in file_list if Path.is_file(x)]
 

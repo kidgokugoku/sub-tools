@@ -11,9 +11,6 @@ from pathlib import Path
 import chardet
 from pymkv import MKVFile
 
-# ASS/SSA style config
-
-# Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 STR_DEFAULT_STYLE = """Style: Default,思源宋体 Heavy,28,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0.1,0,1,1,3,2,30,30,15,1
 Style: EN,GenYoMin TW B,11,&H003CA8DC,&H000000FF,&H00000000,&H00000000,1,0,0,0,90,100,0,0,1,1,2,2,30,30,10,1
 Style: JP,GenYoMin JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,2,2,30,30,10,1"""
@@ -21,15 +18,8 @@ Style: JP,GenYoMin JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,1
 STR_2ND_EN_STYLE = "{\\\\rEN\\\\blur3}"
 STR_2ND_JP_STYLE = "{\\\\rJP\\\\blur3}"
 
-
-STR_CN_STYLE = "Style: Default,GenYoMin TW B,23,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0,0,1,1,3,2,30,30,10,1"
 STR_EN_STYLE = "Style: Default,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.3,3,2,30,30,20,1"
 STR_JP_STYLE = "Style: Default,GenYoMin JP B,23,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0.1,2,2,30,30,10,1"
-"""STR_XX_STYLE .ass文件的XX语言配置
-
-STR_DEFAULT_STYLE 是srt转换ass时的默认样式, 可以通过 Aegisub 自己调整合适后，用文本方式打开字幕复制粘贴过来。
-STR_2ND_XX_STYLE  是作为副字幕时的样式
-"""
 
 ARGS = ""
 
@@ -41,10 +31,10 @@ LIST_EXTRACT_ISO639 = [
     "zho",
     "chi",
     "jpn",
-]
-# LIST_EXTRACT_ISO639  需要提取的字幕语言的ISO639代码列表
+]  # LIST_EXTRACT_ISO639  需要提取的字幕语言的ISO639代码列表
 
 logger = logging.getLogger("sub_tools")
+executor = ThreadPoolExecutor(max_workers=17)
 
 
 class CustomFormatter(logging.Formatter):
@@ -205,89 +195,6 @@ class MergeSRT:
         return mergedContent
 
 
-def init_logger():
-    logger.setLevel(logging.INFO)
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
-    ch.setFormatter(CustomFormatter())
-    logger.addHandler(ch)
-
-
-def read_file(file: Path):
-    return file.read_text(encoding=chardet.detect(file.read_bytes())["encoding"])
-
-
-def merge_SRTs(files: list[Path]):
-    output_file_list = []
-    file_groups = []
-    it = iter(files)
-    last_file = Path(next(it, None))
-    file_group = [last_file]
-    while (file := next(it, None)) is not None:
-        file = Path(file)
-        if not (
-            file.name.split("_", 1)[0] == last_file.name.split("_", 1)[0]
-            or file.stem == last_file.stem
-        ):
-            file_groups.append(file_group)
-            file_group.clear()
-            last_file = file
-        file_group.append(file)
-    file_groups.append(file_group)
-    logger.debug(file_groups)
-    for g in file_groups:
-        for file1, file2 in combinations(g, 2):
-            if (
-                "_" in str(file1)
-                and "_" in str(file2)
-                and file1.name.split("_")[-1] == file2.name.split("_")[-1]
-            ):
-                logger.debug(f"{file1} \n&\n {file2} are same language")
-                continue
-            # file_track2_chi_track1_eng.srt
-            output_file = Path(
-                f'{file2.with_suffix("")}_{file1.name.split("_", 1)[-1]}'
-            )
-            file = Path(str(output_file).split("_")[-1])
-            if not (
-                file.with_suffix(".ass").is_file() or file.with_suffix(".srt").is_file()
-            ):
-                output_file = file.with_suffix(".srt")
-
-            if output_file.is_file():
-                if not ARGS.force:
-                    logger.info(f"{output_file} exist, skipping")
-                    continue
-                logger.info(f"{output_file} exist, overwriting")
-            try:
-                MergeSRT(file1, file2).save(output_file)
-            except ValueError:
-                logger.info(f"skipped {file.name}")
-                continue
-            output_file_list.append(output_file)
-
-    batch_execute(SRT_to_ASS, output_file_list)
-
-
-def SRT_to_ASS(file: Path):
-    output_file = file.with_suffix(".ass")
-
-    if output_file.is_file():
-        logger.info(f"{output_file} exist")
-        if not ARGS.force:
-            return
-    logger.info(f"srt2ass: {file.stem}\n")
-
-    ASS.fromSRT(file).update_style().save(output_file)
-    return
-
-
-def update_ASS_style(file: Path):
-    logger.info(f"updateAssStyle: {file.name}\n")
-    ASS.fromASS(file).update_style().save(file)
-    return
-
-
 class ASS:
     def __init__(self, styles, events):
         self.styles = styles
@@ -297,7 +204,8 @@ class ASS:
     def fromASS(cls, file: Path):
         styles = []
         events = []
-        for line in [x.strip() for x in file.read_text().split("\n") if x.strip()]:
+        section = ""
+        for line in [x.strip() for x in read_file(file).split("\n") if x.strip()]:
             if line.startswith("[V4+ Styles]"):
                 section = "styles"
                 continue
@@ -361,7 +269,6 @@ class ASS:
         output_str += "Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text\n"
         for event in self.events:
             output_str += str(event) + "\n"
-        logger.debug(output_str)
         file.write_bytes(output_str.encode("utf-8"))
 
     def __str__(self):
@@ -371,7 +278,6 @@ class ASS:
         self.styles = [self.Style(x) for x in self.get_style().split("\n")]
         second_style = self.get_2nd_style()
         for event in self.events:
-            logger.debug(f"event: {event}")
             event.update_style(second_style)
         return self
 
@@ -441,9 +347,13 @@ class ASS:
 
         def update_style(self, second_style: str):
             self.text = re.sub(r",\{\\fn(.*?)\}", ",", self.text)
-            self.text = re.sub(r"\{\\r\}", "", self.text)
+            self.text = re.sub(r"\{.*?\}", "", self.text)
             self.text = self.text.replace("\\N", "\\N" + second_style)
-            self.text = "{\\blur3}" + self.text
+            self.text = (
+                second_style + self.text
+                if not re.search(r"[\u4e00-\u9fa5]+", self.text)
+                else "{\\blur3}" + self.text
+            )
             return
 
         def __str__(self):
@@ -468,48 +378,91 @@ class ASS:
         )
 
 
-def batch_execute(func, files):
-    with ThreadPoolExecutor(max_workers=17) as executor:
-        return executor.map(func, files, timeout=15)
+def init_logger():
+    logger.setLevel(logging.INFO)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.DEBUG)
+    ch.setFormatter(CustomFormatter())
+    logger.addHandler(ch)
+
+
+def read_file(file: Path):
+    return file.read_text(encoding=chardet.detect(file.read_bytes())["encoding"])
+
+
+def merge_SRTs(files: list[Path]):
+    mystem = lambda file: file.with_suffix("").with_suffix("").with_suffix("")
+    groups = [
+        [file for file in files if mystem(file) == value]
+        for value in set([mystem(file) for file in files])
+    ]
+    output_files = []
+    logger.debug(groups)
+    for g in groups:
+        for file1, file2 in combinations(g, 2):
+            if file1.suffixes[-2] == file2.suffixes[-2]:
+                continue
+            output_file = file1.with_suffix("".join(file2.suffixes[-3:]))
+            file = mystem(file1)
+            if not (
+                file.with_suffix(".ass").is_file() or file.with_suffix(".srt").is_file()
+            ):
+                output_file = file.with_suffix(".srt")
+            if output_file.is_file():
+                logger.info(f"{output_file} exist")
+                if not ARGS.force:
+                    continue
+            try:
+                MergeSRT(file1, file2).save(output_file)
+            except ValueError:
+                logger.info(f"can't merge, skipped {file.name}")
+                continue
+            output_files.append(output_file)
+    executor.map(SRT_to_ASS, output_files)
+
+
+def SRT_to_ASS(file: Path):
+    output_file = file.with_suffix(".ass")
+    if output_file.is_file():
+        logger.info(f"{output_file} exist")
+        if not ARGS.force:
+            return
+    logger.info(f"srt2ass: {file.stem}\n")
+    ASS.fromSRT(file).update_style().save(output_file)
+
+
+def update_ASS_style(file: Path):
+    logger.info(f"Updating style: {file.name}\n")
+    ASS.fromASS(file).update_style().save(file)
 
 
 def extract_subs_MKV(files: list[Path]):
+    dst = lambda file, ext: Path(
+        file.with_suffix(f".track{str(sub._track_id)}.{sub._language}.{ext}")
+    )
     for file in files:
-        output_file_list = []
+        output_SRTs = []
         logger.info(f"extracting: {file.name}")
         subs = [x for x in MKVFile(file).get_track() if x._track_type == "subtitles"]
         logger.debug(subs)
-        for ASS_sub in [x for x in subs if "SubStationAlpha" in x._track_codec]:
-            dst_srt_path = str(file).replace(
-                ".mkv", f"_track{str(ASS_sub._track_id)}_{ASS_sub._language}.ass"
-            )
-            if dst_srt_path.is_file():
+        for sub in [x for x in subs if "SubStationAlpha" in x._track_codec]:
+            dst_file = dst(file, "ass")
+            if dst_file.is_file():
+                logger.info(f"{dst_file} exist")
                 if not ARGS.force:
                     continue
-                logger.info(f"{dst_srt_path} exist, overwriting")
-            logger.debug(f"MKVExtract:{ASS_sub}")
-            subprocess.run(
-                f'mkvextract "{file}" tracks {ASS_sub._track_id}:"{dst_srt_path}"\n'
-            )
-            update_ASS_style(dst_srt_path)
-        track_cnt = 0
-        for SRT_sub in [
+            subprocess.run(f'mkvextract "{file}" tracks {sub._track_id}:"{dst_file}"\n')
+            update_ASS_style(dst_file)
+        for sub in [
             x
             for x in subs
-            if "SRT" in x._track_codec and (x._language in LIST_EXTRACT_ISO639)
+            if "SRT" in x._track_codec and x._language in LIST_EXTRACT_ISO639
         ]:
-            dst_srt_path = str(file).replace(
-                ".mkv", f"_track{SRT_sub._track_id}_{SRT_sub._language}.srt"
-            )
-            logger.debug(f"MKVExtract:{SRT_sub}")
-            subprocess.run(
-                f'mkvextract "{file}" tracks {SRT_sub._track_id}:"{dst_srt_path}"\n'
-            )
-            track_cnt += 1
-            output_file_list.append(dst_srt_path)
-        if track_cnt == 1:
-            SRT_to_ASS(dst_srt_path)
-        merge_SRTs(output_file_list)
+            dst_file = dst(file, "srt")
+            subprocess.run(f'mkvextract "{file}" tracks {sub._track_id}:"{dst_file}"\n')
+            output_SRTs.append(dst_file)
+        executor.map(SRT_to_ASS, output_SRTs)
+        merge_SRTs(output_SRTs)
 
 
 def load_args():
@@ -554,47 +507,44 @@ def load_args():
     logger.debug(ARGS)
 
 
-def get_file_list():
-
-    file_list = [Path(x).resolve() for x in ARGS.file]
-
-    for arg in file_list:
-        if ARGS.recursive and arg.is_dir():
-            dirs = [x for x in arg.glob("**") if x.is_dir()]
-            file_list += dirs
+def get_files():
+    files = [Path(x).resolve() for x in ARGS.file]
+    for file in files:
+        if ARGS.recursive and file.is_dir():
+            files += [x for x in file.glob("**") if x.is_dir() and x not in files]
         if ARGS.update_ass:
-            file_list += arg.glob("*.ass")
+            files += file.glob("*.ass")
         elif ARGS.extract_sub:
-            file_list += arg.glob("*.mkv")
-            file_list = [x for x in file_list if not x.with_suffix(".ass").is_file()]
+            files += file.glob("*.mkv")
+            files = [x for x in files if not x.with_suffix(".ass").is_file()]
         else:
-            file_list += arg.glob("*.srt")
-
-    file_list = [x for x in file_list if x.is_file()]
-
-    logger.debug(file_list)
-    return file_list
+            files += file.glob("*.srt")
+    files = [x for x in files if x.is_file()]
+    logger.debug(files)
+    return files
 
 
 def main():
     init_logger()
     load_args()
-    files = get_file_list()
+    files = get_files()
 
     if not files:
         logger.info("nothing found")
         return
 
     if ARGS.update_ass:
-        batch_execute(update_ASS_style, files)
+        executor.map(update_ASS_style, files)
     elif ARGS.extract_sub:
         extract_subs_MKV(files)
     elif ARGS.merge_srt:
         merge_SRTs(files)
     else:
-        batch_execute(SRT_to_ASS, files)
+        executor.map(SRT_to_ASS, files)
     return
 
 
 if __name__ == "__main__":
     main()
+
+# how to use ThreadPoolExecutor

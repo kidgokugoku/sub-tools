@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 import argparse
+import itertools
 import json
 import logging
 import re
 import subprocess as sp
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from itertools import combinations
 from pathlib import Path
 
@@ -34,7 +36,7 @@ executor = ThreadPoolExecutor(max_workers=None)
 
 class CustomFormatter(logging.Formatter):
     reset = "\x1b[0m"
-    format = "%(asctime)s - %(levelname)s - %(message)s \n(%(filename)s:%(lineno)d)"
+    format = "%(thread)d - %(msecs)d - %(levelname)s - %(message)s \n(%(filename)s:%(lineno)d)"
     FORMATS = {
         logging.DEBUG: (grey := "\x1b[38;20m") + format + reset,
         logging.INFO: (green := "\x1b[32m") + format + reset,
@@ -47,23 +49,14 @@ class CustomFormatter(logging.Formatter):
         return logging.Formatter(self.FORMATS.get(record.levelno)).format(record)
 
 
-INT_TIMESHIFT = 1000  # INT_TIMESHIFT 合并 srt 字幕时的时间偏移量,单位为ms
-
-
-class MergeSRT:
+class SRT:
     sub = namedtuple("sub", ["begin", "end", "content", "beginTime", "endTime"])
-    timeShift = INT_TIMESHIFT  # ms
 
-    def __init__(self, file1, file2) -> None:
-        self.file1 = file1
-        self.file2 = file2
+    def __init__(self, content) -> None:
+        self.content = content
 
     @classmethod
-    def read_content(cls, f, escape=" "):
-        CJK_percent = lambda x: sum(map(lambda c: "\u4e00" <= c <= "\u9fa5", x)) / (
-            len(x) + 1
-        )
-
+    def fromFile(cls, f, escape=" "):
         def time(rawtime):
             (hr, min, secs) = rawtime.strip().split(":")
             (sec, ms) = secs.strip().split(",")
@@ -73,27 +66,28 @@ class MergeSRT:
             (begin, end) = line[0].strip().split(" --> ")
             return cls.sub(begin, end, [escape.join(line[1:])], time(begin), time(end))
 
-        content = [
-            process(x.split("\n"))
-            for x in re.split(r"\r?\n\r?\n\d+\r?\n", read_file(f)[2:])
-        ]
-        return content, CJK_percent("".join([x.content[0] for x in content]))
+        regex = r"\r?\n\r?\n\d+\r?\n"
+        return cls([process(x.split("\n")) for x in re.split(regex, read_file(f)[2:])])
 
-    def save(self, filename):
-        logger.info(f"merging: \n{self.file1} \n& \n{self.file2}")
-
-        c1, cjk1 = self.read_content(self.file1)
-        c2, cjk2 = self.read_content(self.file2)
-        if cjk1 < cjk2:
+    def merge_with(self, srt):
+        iscjk = lambda x: "\u4e00" <= x <= "\u9fa5"
+        txt = lambda y: "".join([x.content[0] for x in y.content])
+        cjk = lambda z: sum(map(iscjk, (t := txt(z)))) / (len(t) + 1)
+        c1 = self.content
+        c2 = srt.content
+        if cjk(self) < cjk(srt):
             c1, c2 = c2, c1
-        output = ""
-        for index, line in enumerate(self.time_merge(c1, c2)):
-            c = "\n".join(line.content)
-            output += f"{index + 1}\n{line.begin} --> {line.end}\n{c}\n\n"
-        Path(filename).write_bytes(output.encode("utf-8"))
-        return
+        logger.debug(f"Merge {len(c1)} lines with {len(c2)} lines")
+        return SRT(self.time_merge(c1, c2))
 
-    def time_merge(self, c1, c2):
+    def save_as(self, filename):
+        output = ""
+        for index, line in enumerate(self.content, start=1):
+            c = "\n".join(line.content)
+            output += f"{index}\n{line.begin} --> {line.end}\n{c}\n\n"
+        Path(filename).write_bytes(output.encode("utf-8"))
+
+    def time_merge(self, c1, c2, timeShift=1000):
         lock_type = index1 = index2 = capTime1 = capTime2 = 0
         merged_content = []
         while index1 < len(c1) or index2 < len(c2):
@@ -105,25 +99,23 @@ class MergeSRT:
             lock_type = 0
             if (
                 capTime1 > capTime2
-                and capTime1 > capTime2 + self.timeShift
+                and capTime1 > capTime2 + timeShift
                 and index2 < len(c2)
                 or index1 == len(c1)
             ):
                 lock_type = 1
             if (
                 capTime2 > capTime1
-                and capTime2 > capTime1 + self.timeShift
+                and capTime2 > capTime1 + timeShift
                 and index1 < len(c1)
                 or index2 == len(c2)
             ):
                 lock_type = 2
-
             if not lock_type == 1:
                 captmp = c1[index1]
                 index1 += 1
                 if lock_type == 2:
                     merged_content.append(captmp)
-
             if not lock_type == 2:
                 if captmp == "":
                     captmp = c2[index2]
@@ -140,27 +132,12 @@ class ASS:
         self.events = events
 
     @classmethod
-    def fromASS(cls, file: Path):
+    def fromASSf(cls, file: Path):
         styles = []
         events = []
-        section = ""
         for line in [y for x in read_file(file).split("\n") if (y := x.strip())]:
-            if line.startswith("[V4+ Styles]"):
-                section = "styles"
-                continue
-            if line.startswith("[Events]"):
-                section = "events"
-                continue
-            if section == "styles":
-                if line.startswith("Format:"):
-                    continue
-                if line.startswith("Style:"):
-                    styles.append(cls.Style(line))
-            if section == "events":
-                if line.startswith("Format:"):
-                    continue
-                if line.startswith("Dialogue:"):
-                    events.append(cls.Event(line))
+            styles += [cls.Style(line)] if line.startswith("Style:") else []
+            events += [cls.Event(line)] if line.startswith("Dialogue:") else []
         return cls(styles, events)
 
     @classmethod
@@ -174,7 +151,7 @@ class ASS:
         ftime = lambda x: re.sub(r"\d*(\d:\d{2}:\d{2}),(\d{2})\d", r"\1.\2", x)
         events = [
             cls.Event.fromSrt(ftime(x.begin), ftime(x.end), rm_style(x.content[0]))
-            for x in MergeSRT.read_content(file, escape="\\N")[0]
+            for x in SRT.fromFile(file, escape="\\N").content
         ]
         return cls([], events)
 
@@ -191,29 +168,20 @@ class ASS:
             output_str += str(event) + "\n"
         file.write_bytes(output_str.encode("utf-8"))
 
-    def update_style(self):
+    def update(self):
         self.styles = [self.Style(x) for x in self.get_style().split("\n")]
         second_style = self.get_2nd_style()
         [e.update_style(second_style) for e in self.events]
         return self
 
-    def has_japanese(self, string):
-        return re.search(r"[\u3040-\u30ff]+", string)
-
-    def is_only_english(self, string):
-        try:
-            string.encode(encoding="ascii")
-        except UnicodeEncodeError:
-            return False
-        else:
-            return True
+    def is_eng_only(self, string):
+        regex = r"[\W\w\s]"
+        return re.sub(regex, "", string).strip() == ""
 
     def text(self):
-        res = ""
-        for event in self.events:
-            res += event.text + "\n"
-        return res
+        return "".join([event.text for event in self.events])
 
+    @dataclass
     class Style:
         def __init__(self, line: str):
             (
@@ -245,6 +213,7 @@ class ASS:
         def __str__(self):
             return f"Style: {self.name},{self.fontname},{self.fontsize},{self.primarycolour},{self.secondarycolour},{self.outlinecolour},{self.backcolour},{self.bold},{self.italic},{self.underline},{self.strikeout},{self.scalex},{self.scaley},{self.spacing},{self.angle},{self.borderstyle},{self.outline},{self.shadow},{self.alignment},{self.marginl},{self.marginr},{self.marginv},{self.encoding}"
 
+    @dataclass
     class Event:
         def __init__(self, line: str):
             self.line = line
@@ -259,20 +228,24 @@ class ASS:
                 self.marginv,
                 self.effect,
                 self.text,
-            ) = line.split(":", 1)[1].split(",", 9)
+            ) = (
+                line.split(":", 1)[1].strip().split(",", 9)
+            )
 
         @classmethod
         def fromSrt(cls, start, end, text):
             return cls(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
 
+        def has_jap(self, string):
+            return re.search(r"[\u3040-\u30ff]+", string)
+
         def update_style(self, second_style: str) -> None:
-            self.text = re.sub(r",\{\\fn(.*?)\}", ",", self.text)
-            self.text = re.sub(r"\{.*?\}", "", self.text)
-            self.text = self.text.replace("\\N", "\\N" + second_style)
+            txt = self.text
+            txt = re.sub(r",\{\\fn(.*?)\}", ",", txt)
+            txt = re.sub(r"\{.*?\}", "", txt)
+            txt = txt.replace("\\N", "\\N" + second_style)
             self.text = (
-                second_style + self.text
-                if not re.search(r"[\u4e00-\u9fa5]+", self.text)
-                else "{\\blur3}" + self.text
+                second_style + txt if not self.has_jap(txt) else "{\\blur3}" + txt
             )
             return
 
@@ -282,16 +255,16 @@ class ASS:
     def get_style(self):
         return (
             STR_EN_STYLE
-            if self.is_only_english(text := self.text())
+            if self.is_eng_only(text := self.text())
             else STR_JP_STYLE
-            if self.has_japanese(text)
+            if self.Event.has_japanese(text)
             else STR_DEFAULT_STYLE
         )
 
     def get_2nd_style(self):
         return (
             STR_2ND_JP_STYLE
-            if self.has_japanese(txt := self.text())
+            if self.Event.has_jap(txt := self.text())
             else ""
             if txt.count("\n") * 0.9 < txt.count("\\N")
             else STR_2ND_EN_STYLE
@@ -309,28 +282,21 @@ def merge_SRTs(files: list[Path]):
         if len(f2.suffixes) >= 3 and f1.suffixes[-2] == f2.suffixes[-2]:
             return
         output_file = f1.with_suffix("".join(f2.suffixes[-3:]))
-        file = stem(f2)
-        if not (
-            file.with_suffix(".ass").is_file() or file.with_suffix(".srt").is_file()
-        ):
+        check_ext = lambda file, ext: file.with_suffix(ext).is_file()
+        if not (check_ext(file := stem(f2), ".ass") or check_ext(file, ".srt")):
             output_file = file.with_suffix(".srt")
         if output_file.is_file():
             logger.info(f"{output_file} exist")
             if not ARGS.force:
                 return
-        MergeSRT(f1, f2).save(output_file)
+        logger.info(f"merging: \n{f1.name} \n& \n{f2.name}\nas\n{output_file.name}")
+        SRT.fromFile(f1).merge_with(SRT.fromFile(f2)).save_as(output_file)
         SRT_to_ASS(output_file)
 
     [
         executor.submit(merge, tup[0], tup[1])
-        for comb in [
-            combinations(g, 2)
-            for g in [
-                [x for x in files if stem(x) == value]
-                for value in set([stem(f) for f in files])
-            ]
-        ]
-        for tup in comb
+        for g in [itertools.groupby(files, key=stem)]
+        for tup in combinations(g, 2)
     ]
 
 
@@ -340,13 +306,13 @@ def SRT_to_ASS(file: Path):
         logger.info(f"{output_file} exist")
         if not ARGS.force:
             return
-    logger.info(f"srt2ass: {file.stem}\n")
-    ASS.fromSRT(file).update_style().save(output_file)
+    logger.info(f"Convert to ASS: {file.stem}\n")
+    ASS.fromSRT(file).update().save(output_file)
 
 
 def update_ASS_style(file: Path):
-    logger.info(f"Updating style: {file.name}\n")
-    ASS.fromASS(file).update_style().save(file)
+    logger.info(f"Updating style: {file.name}")
+    ASS.fromASSf(file).update().save(file)
 
 
 def extract_subs_MKV(files: list[Path]):
@@ -355,14 +321,10 @@ def extract_subs_MKV(files: list[Path]):
     for file in files:
         logger.info(f"extracting: {file.name}")
         subs = [
-            SubInfo(
-                int(sub["index"]),
-                sub["codec_name"],
-                sub["tags"]["language"],
-            )
+            SubInfo(int(sub["index"]), sub["codec_name"], sub["tags"]["language"])
             for sub in json.loads(
                 sp.check_output(
-                    f'ffprobe "{file}" -hide_banner -select_streams s -show_entries stream=index:stream_tags=language:stream=codec_name -v quiet -print_format json',
+                    f'ffprobe "{file}" -hide_banner -select_streams s -show_entries stream=index:stream_tags=language:stream=codec_name -v quiet -print_format json'
                 ).decode("utf-8")
             )["streams"]
         ]
@@ -379,15 +341,6 @@ def extract_subs_MKV(files: list[Path]):
 
 
 def main():
-    def init_logger():
-        logger.setLevel(logging.INFO)
-        if ARGS.verbose:
-            logger.setLevel(logging.DEBUG)
-        ch = logging.StreamHandler()
-        ch.setLevel(logging.DEBUG)
-        ch.setFormatter(CustomFormatter())
-        logger.addHandler(ch)
-
     def load_args():
         parser = argparse.ArgumentParser()
         parser.add_argument(
@@ -429,29 +382,33 @@ def main():
         ARGS = parser.parse_args()
         logger.debug(ARGS)
 
+    def init_logger():
+        logger.setLevel(logging.INFO)
+        if ARGS.verbose:
+            logger.setLevel(logging.DEBUG)
+        ch = logging.StreamHandler()
+        ch.setLevel(logging.DEBUG)
+        ch.setFormatter(CustomFormatter())
+        logger.addHandler(ch)
+
     def get_files():
-        files = [Path(x).resolve() for x in ARGS.file]
-        for file in files:
-            if ARGS.recurse and file.is_dir():
-                files += [x for x in file.glob("**") if x.is_dir() and x not in files]
-            if ARGS.update_ass:
-                files += file.glob("*.ass")
-            elif ARGS.extract_sub:
-                files += file.glob("*.mkv")
-                files = [x for x in files if not x.with_suffix(".ass").is_file()]
-            else:
-                files += file.glob("*.srt")
-        files = [x for x in files if x.is_file()]
-        logger.debug(files)
-        if not files:
-            logger.info("nothing found")
-            quit()
-        return files
+        paths = [Path(x).resolve() for x in ARGS.file]
+        glob = lambda paths, pattern: sum([list(f.glob(pattern)) for f in paths], [])
+        if ARGS.recurse:
+            paths = glob(paths, "**")
+        if ARGS.update_ass:
+            paths = glob(paths, "*.ass")
+        elif ARGS.extract_sub:
+            paths = [x for x in glob(paths, "*.mkv") if not x.rglob(f"{x.stem}*.ass")]
+        else:
+            paths = glob(paths, "*.srt")
+        logger.debug(paths)
+        logger.info(f"found {len(paths)} files")
+        return paths
 
     load_args()
     init_logger()
     files = get_files()
-
     if ARGS.update_ass:
         executor.map(update_ASS_style, files)
     elif ARGS.extract_sub:

@@ -13,22 +13,15 @@ from pathlib import Path
 
 import chardet
 
-STR_DEFAULT_STYLE = """Style: Default,思源宋体 Heavy,28,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0.1,0,1,1,3,2,30,30,15,1
+STYLE_DEFAULT = """Style: Default,思源宋体 Heavy,28,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,85,100,0.1,0,1,1,3,2,30,30,15,1
 Style: ENG,GenYoMin TW B,11,&H003CA8DC,&H000000FF,&H00000000,&H00000000,1,0,0,0,90,100,0,0,1,1,2,2,30,30,10,1
 Style: JPN,GenYoMin JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,2,2,30,30,10,1"""
-STR_2ND_EN_STYLE = "{\\\\rENG\\\\blur3}"
-STR_2ND_JP_STYLE = "{\\\\rJPN\\\\blur3}"
-STR_EN_STYLE = "Style: Default,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.3,3,2,30,30,20,1"
-STR_JP_STYLE = "Style: Default,GenYoMin JP B,23,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0.1,2,2,30,30,10,1"
-
+STYLE_2_EN = "{\\rENG\\blur3}"
+STYLE_2_JP = "{\\rJPN\\blur3}"
+STYLE_EN = "Style: Default,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.3,3,2,30,30,20,1"
+STYLE_JP = "Style: Default,GenYoMin JP B,23,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0.1,2,2,30,30,10,1"
 ARGS = ""
-
-LIST_LANG = [
-    "eng",
-    "zho",
-    "chi",
-    "jpn",
-]  # LIST_LANG  需要提取的字幕语言的ISO639代码列表
+LIST_LANG = ["eng", "zho", "chi", "jpn"]  # LIST_LANG  需要提取的字幕语言的ISO639代码列表
 
 logger = logging.getLogger("sub_tools")
 executor = ThreadPoolExecutor(max_workers=None)
@@ -36,7 +29,7 @@ executor = ThreadPoolExecutor(max_workers=None)
 
 class CustomFormatter(logging.Formatter):
     reset = "\x1b[0m"
-    format = "%(thread)d - %(msecs)d - %(levelname)s - %(message)s \n(%(filename)s:%(lineno)d)"
+    format = "%(thread)d - %(asctime)s - %(levelname)s - %(message)s \n(%(filename)s:%(lineno)d)"
     FORMATS = {
         logging.DEBUG: (grey := "\x1b[38;20m") + format + reset,
         logging.INFO: (green := "\x1b[32m") + format + reset,
@@ -80,12 +73,12 @@ class SRT:
         logger.debug(f"Merge {len(c1)} lines with {len(c2)} lines")
         return SRT(self.time_merge(c1, c2))
 
-    def save_as(self, filename):
+    def save_as(self, file: Path):
         output = ""
         for index, line in enumerate(self.content, start=1):
             c = "\n".join(line.content)
             output += f"{index}\n{line.begin} --> {line.end}\n{c}\n\n"
-        Path(filename).write_bytes(output.encode("utf-8"))
+        file.write_text(output, encoding="utf-8")
 
     def time_merge(self, c1, c2, timeShift=1000):
         lock_type = index1 = index2 = capTime1 = capTime2 = 0
@@ -156,26 +149,24 @@ class ASS:
         return cls([], events)
 
     def save(self, file: Path):
-        output_str = "[Script Info]\n"
-        output_str += "ScriptType: v4.00+\n"
-        output_str += "[V4+ Styles]\n"
-        output_str += "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        for style in self.styles:
-            output_str += str(style) + "\n"
-        output_str += "[Events]\n"
-        output_str += "Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text\n"
-        for event in self.events:
-            output_str += str(event) + "\n"
-        file.write_bytes(output_str.encode("utf-8"))
+        output_str = """[Script Info]
+ScriptType: v4.00+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"""
+        output_str += "\n".join([str(style) for style in self.styles])
+        output_str += """\n[Events]
+Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text\n"""
+        output_str += "\n".join([str(event) for event in self.events])
+        file.write_text(output_str, encoding="utf-8")
 
     def update(self):
         self.styles = [self.Style(x) for x in self.get_style().split("\n")]
-        second_style = self.get_2nd_style()
+        second_style = self.get_2nd_style() if len(self.styles) > 1 else ""
         [e.update_style(second_style) for e in self.events]
         return self
 
     def is_eng_only(self, string):
-        regex = r"[\W\w\s]"
+        regex = r"[\W\sA-Za-z0-9_\u00A0-\u00BF\u00C0-\u03FF]"
         return re.sub(regex, "", string).strip() == ""
 
     def text(self):
@@ -236,8 +227,13 @@ class ASS:
         def fromSrt(cls, start, end, text):
             return cls(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
 
-        def has_jap(self, string):
-            return re.search(r"[\u3040-\u30ff]+", string)
+        @classmethod
+        def has_jap(cls, x):
+            return re.search(r"[\u3040-\u30ff]", x) != None
+
+        @classmethod
+        def has_cjk(cls, x):
+            return re.search(r"[\u4e00-\u9fa5]", x) != None
 
         def update_style(self, second_style: str) -> None:
             txt = self.text
@@ -245,7 +241,7 @@ class ASS:
             txt = re.sub(r"\{.*?\}", "", txt)
             txt = txt.replace("\\N", "\\N" + second_style)
             self.text = (
-                second_style + txt if not self.has_jap(txt) else "{\\blur3}" + txt
+                second_style + txt if not self.has_cjk(txt) else "{\\blur3}" + txt
             )
             return
 
@@ -254,20 +250,20 @@ class ASS:
 
     def get_style(self):
         return (
-            STR_EN_STYLE
+            STYLE_EN
             if self.is_eng_only(text := self.text())
-            else STR_JP_STYLE
-            if self.Event.has_japanese(text)
-            else STR_DEFAULT_STYLE
+            else STYLE_JP
+            if self.Event.has_jap(text)
+            else STYLE_DEFAULT
         )
 
     def get_2nd_style(self):
         return (
-            STR_2ND_JP_STYLE
+            STYLE_2_JP
             if self.Event.has_jap(txt := self.text())
             else ""
-            if txt.count("\n") * 0.9 < txt.count("\\N")
-            else STR_2ND_EN_STYLE
+            if len(self.events) * 0.9 < txt.count("\\N")
+            else STYLE_2_EN
         )
 
 
@@ -281,11 +277,7 @@ def merge_SRTs(files: list[Path]):
     def merge(f1: Path, f2: Path):
         if len(f2.suffixes) >= 3 and f1.suffixes[-2] == f2.suffixes[-2]:
             return
-        output_file = f1.with_suffix("".join(f2.suffixes[-3:]))
-        check_ext = lambda file, ext: file.with_suffix(ext).is_file()
-        if not (check_ext(file := stem(f2), ".ass") or check_ext(file, ".srt")):
-            output_file = file.with_suffix(".srt")
-        if output_file.is_file():
+        if (output_file := f1.with_suffix("".join(f2.suffixes[-3:]))).is_file():
             logger.info(f"{output_file} exist")
             if not ARGS.force:
                 return
@@ -294,15 +286,14 @@ def merge_SRTs(files: list[Path]):
         SRT_to_ASS(output_file)
 
     [
-        executor.submit(merge, tup[0], tup[1])
-        for g in [itertools.groupby(files, key=stem)]
-        for tup in combinations(g, 2)
+        executor.submit(merge, *tup)
+        for s, g in itertools.groupby(files, key=stem)
+        for tup in combinations(list(g), 2)
     ]
 
 
 def SRT_to_ASS(file: Path):
-    output_file = file.with_suffix(".ass")
-    if output_file.is_file():
+    if (output_file := file.with_suffix(".ass")).is_file():
         logger.info(f"{output_file} exist")
         if not ARGS.force:
             return
@@ -392,14 +383,16 @@ def main():
         logger.addHandler(ch)
 
     def get_files():
+        glob = lambda paths, pattern: sum([list(p.glob(pattern)) for p in paths], [])
         paths = [Path(x).resolve() for x in ARGS.file]
-        glob = lambda paths, pattern: sum([list(f.glob(pattern)) for f in paths], [])
         if ARGS.recurse:
             paths = glob(paths, "**")
         if ARGS.update_ass:
             paths = glob(paths, "*.ass")
         elif ARGS.extract_sub:
-            paths = [x for x in glob(paths, "*.mkv") if not x.rglob(f"{x.stem}*.ass")]
+            paths = [
+                x for x in glob(paths, "*.mkv") if not list(x.glob(f"{x.stem}*.ass"))
+            ]
         else:
             paths = glob(paths, "*.srt")
         logger.debug(paths)

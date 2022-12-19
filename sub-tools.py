@@ -20,7 +20,7 @@ ARGS = ""
 LIST_LANG = ["eng", "zho", "chi", "jpn"]  # LIST_LANG  需要提取的字幕语言的ISO639代码列表
 EFFECT = "{\\blur3}"
 logger = logging.getLogger("sub_tools")
-executor = ThreadPoolExecutor(max_workers=32)
+executor = ThreadPoolExecutor()
 
 
 class CustomFormatter(logging.Formatter):
@@ -63,8 +63,8 @@ class SRT:
             merged_content = []
             while content1 and content2:
                 if (
-                    abs(content1[0].beginTime - content2[0].beginTime) <= time_shift
-                    or abs(content1[0].endTime - content2[0].endTime) <= time_shift
+                    content1[0].beginTime - time_shift <= content2[0].beginTime
+                    and content1[0].endTime + time_shift >= content2[0].endTime
                 ):
                     content1[0] = content1[0]._replace(
                         content=content1[0].content + content2.pop(0).content
@@ -83,7 +83,6 @@ class SRT:
         content1, content2 = self.content, srt.content
         if cjk_percentage(content1) < cjk_percentage(content2):
             content1, content2 = content2, content1
-        logger.debug(f"Merge {len(content1)} lines with {len(content2)} lines")
         return SRT(time_merge(content1, content2))
 
     def save_as(self, file: Path):
@@ -95,8 +94,6 @@ class SRT:
 
 
 class ASS:
-    RE_ENG = re.compile(r"[\W\sA-Za-z0-9_\u00A0-\u03FF]+")
-
     def __init__(self, styles, events):
         self.styles = styles
         self.events = events
@@ -114,8 +111,7 @@ class ASS:
     def from_SRT(cls, file: Path):
         def rm_style(l):
             l = re.sub(r"<([ubi])>", r"{\\\1}", l)
-            l = re.sub(r"</([ubi])>", r"{\\\1}", l)
-            l = re.sub(r'<font\s+color="?(\w*?)"?>|</font>', "", l)
+            l = re.sub(r'<font\s+color="?(\w*?)"?>|</font>|</([ubi])>', "", l)
             return l
 
         re_time = re.compile(r"\d*(\d:\d{2}:\d{2}),(\d{2})\d")
@@ -144,14 +140,15 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
         return self
 
     def is_eng_only(self, text):
-        return self.RE_ENG.fullmatch(text) != None
+        re_eng = re.compile(r"^[\W\sA-Za-z0-9_\u00A0-\u03FF]+$")
+        return re_eng.fullmatch(text) != None
 
     def _text(self):
         return "".join([event.text for event in self.events])
 
     def _text_2(self):
-        re_1line = re.compile(r"^.*?(//N)?")
-        return "".join([re_1line.sub("", event.text) for event in self.events])
+        lines = [x[-1] for e in self.events if len(x := e.text.split("\\N", 1)) > 1]
+        return "".join(lines)
 
     class Style:
         def __init__(self, line: str):
@@ -233,7 +230,7 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
             STYLE_2_JP
             if self.Event.has_jap(txt := self._text_2())
             else STYLE_2_EN
-            if self.is_eng_only("", txt)
+            if self.is_eng_only(txt)
             else ""
         )
 

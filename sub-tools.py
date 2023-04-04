@@ -16,7 +16,7 @@ STYLE_2_EN = "{\\rENG}"
 STYLE_2_JP = "{\\rJPN}"
 STYLE_EN = "Style: Default,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.3,3,2,30,30,20,1"
 ARGS = ""
-LIST_LANG = ["eng", "chi"]  # "jpn", "spa"  # LIST_LANG  需要提取的字幕语言的ISO639代码列表
+LIST_LANG = ["eng", "chi", "zho"]  # "jpn", "spa"  # LIST_LANG  需要提取的字幕语言的ISO639代码列表
 EFFECT = "{\\blur3}"
 logger = logging.getLogger("sub_tools")
 executor = ThreadPoolExecutor(max_workers=None)
@@ -217,7 +217,10 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
             self.text = re.sub(r"\{.*?\}|<.*?>", "", self.text)
             texts = [EFFECT + t for t in self.text.split("\\N")]
             self.text = "\\N".join(
-                [t if self.has_cjk(t) else second_style + t for t in texts]
+                [
+                    t if self.has_cjk(t) and not self.has_jap(t) else second_style + t
+                    for t in texts
+                ]
             )
             self.style = "Default"
             return self
@@ -311,7 +314,7 @@ def extract_subs(files: list[Path]) -> None:
         )
         return [out_sub]
 
-    for file in tqdm(files, nested=True):
+    for file in tqdm(files, position=0):
         logger.info(f"extracting: {file.name}")
         probe_cmd = [
             "ffprobe",

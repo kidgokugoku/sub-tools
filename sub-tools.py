@@ -3,7 +3,7 @@ import argparse
 import logging
 import re
 from collections import namedtuple
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
 from tqdm import tqdm
 from pathlib import Path
 
@@ -16,7 +16,12 @@ STYLE_2_EN = "{\\rENG}"
 STYLE_2_JP = "{\\rJPN}"
 STYLE_EN = "Style: Default,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.3,3,2,30,30,20,1"
 ARGS = ""
-LIST_LANG = ["eng", "chi", "zho"]  # "jpn", "spa"  # LIST_LANG  需要提取的字幕语言的ISO639代码列表
+LIST_LANG = [
+    "eng",
+    "chi",
+    "zho",
+    "jpn",
+]  # "jpn", "spa"  # LIST_LANG  需要提取的字幕语言的ISO639代码列表
 EFFECT = "{\\blur3}"
 logger = logging.getLogger("sub_tools")
 executor = ThreadPoolExecutor(max_workers=None)
@@ -76,9 +81,13 @@ class SRT:
         return merged_content
 
     def merge_with(self, srt):
-        isCJK = lambda x: "\u4e00" <= x <= "\u9fa5"
-        all_text = lambda c: "".join([x for y in c for x in y.content])
-        cjk_percentage = lambda z: sum(map(isCJK, (t := all_text(z)))) / (len(t) + 1)
+        def isCJK(x):
+            return "一" <= x <= "龥"
+
+        def cjk_percentage(z):
+            all_text = "".join([x for y in z for x in y.content])
+            return sum(map(isCJK, all_text)) / (len(all_text) + 1)
+
         content1, content2 = self.content, srt.content
         if cjk_percentage(content1) < cjk_percentage(content2):
             content1, content2 = content2, content1
@@ -108,11 +117,13 @@ class ASS:
 
     @classmethod
     def from_SRT(cls, file: Path):
-        def rm_style(l):
-            l = re.sub(r"<([ubi])>", r"{\\\1}", l)
-            return re.sub(r'<font\s+color="?(\w*?)"?>|</font>|</([ubi])>', "", l)
+        def rm_style(line):
+            line = re.sub(r"<([ubi])>", r"{\\\1}", line)
+            return re.sub(r'<font\s+color="?(\w*?)"?>|</font>|</([ubi])>', "", line)
 
-        ftime = lambda x: x.replace(",", ".")[:-1]
+        def ftime(x):
+            return x.replace(",", ".")[:-1]
+
         events = [
             cls.Event.fromSrt(ftime(x.begin), ftime(x.end), rm_style(x.content[0]))
             for x in SRT.fromFile(file, escape="\\N").content
@@ -139,7 +150,7 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
         return self
 
     def is_eng_only(self, text: str) -> bool:
-        return re.fullmatch(r"^[\W\sA-Za-z0-9_\u00A0-\u03FF]+$", text) != None
+        return re.fullmatch("^[\\W\\sA-Za-z0-9_\\u00A0-\\u03FF]+$", text) is not None
 
     def _text(self) -> str:
         return "".join([event.text for event in self.events])
@@ -207,11 +218,11 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
 
         @staticmethod
         def has_jap(x: str) -> bool:
-            return re.search(r"[\u3040-\u30f0]", x) != None
+            return re.search("[\\u3040-\\u30f0]", x) is not None
 
         @staticmethod
         def has_cjk(x: str) -> bool:
-            return re.search(r"[\u4e00-\u9fa5]", x) != None
+            return re.search("[\\u4e00-\\u9fa5]", x) is not None
 
         def update_style(self, second_style: str):
             self.text = re.sub(r"\{.*?\}|<.*?>", "", self.text)
@@ -251,6 +262,8 @@ def read_file(file: Path) -> str:
 def merge_SRTs(files: list[Path]):
     from itertools import groupby, combinations
 
+    done_list = []
+
     def merge(file1: Path, file2: Path):
         if file1.suffixes[:-1] in done_list or file2.suffixes[:-1] in done_list:
             return
@@ -258,28 +271,28 @@ def merge_SRTs(files: list[Path]):
             return
         if is_exist(new_file := file1.with_suffix("".join(file2.suffixes[:]))):
             return
-        done_list.append(file1.suffixes[:-1])
-        done_list.append(file2.suffixes[:-1])
+        done_list.append([*file1.suffixes[:-1], *file2.suffixes[:-1]])
         logger.info(f"merging:\n{file1.name}\n&\n{file2.name}")
         SRT.fromFile(file1).merge_with(SRT.fromFile(file2)).save_as(new_file)
         SRT_to_ASS(new_file)
 
-    def stem(file):
-        while file.with_suffix("") != file:
-            file = file.with_suffix("")
-        return file
+    def stem(file: Path):
+        return str(file).split(".")[0]
 
     for _, g in groupby(sorted(files, key=stem), key=stem):
         group = list(g)
-        done_list = [l for f in group if len(l := f.suffixes[:-1]) > 2]
-        [logger.info(x) for x in group]
+        done_list = [suffix for f in group if len(suffix := f.suffixes[:-1]) > 2]
         [executor.submit(merge, *tup) for tup in combinations(group, 2)]
 
 
 def SRT_to_ASS(file: Path) -> None:
     if not is_exist(new_file := file.with_suffix(".ass")):
         logger.info(f"Convert to ASS: {file.stem}\n")
-        ASS.from_SRT(file).update().save(new_file)
+        try:
+            ASS.from_SRT(file).update().save(new_file)
+        except Exception as e:
+            logger.warning(e)
+            logger.error(f"FAILED Convert to ASS: {file.stem}\n")
 
 
 def update_ASS_style(file: Path) -> None:
@@ -291,8 +304,9 @@ def extract_subs(files: list[Path]) -> None:
     import subprocess as sp
 
     SubInfo = namedtuple("SubInfo", ["index", "codec", "lang"])
+    out_subs = []
 
-    def extract(sub: SubInfo, ext) -> list[Path]:
+    def extract(sub: SubInfo, ext) -> Path:
         if is_exist(out_sub := file.with_suffix(f".track{sub.index}.{sub.lang}.{ext}")):
             return []
         cmd = [
@@ -312,9 +326,11 @@ def extract_subs(files: list[Path]) -> None:
             stdout=sp.DEVNULL,
             stdin=sp.DEVNULL,
         )
-        return [out_sub]
+        out_subs.append(out_sub)
+        return out_sub
 
     for file in tqdm(files, position=0):
+        fs = []
         logger.info(f"extracting: {file.name}")
         probe_cmd = [
             "ffprobe",
@@ -332,13 +348,15 @@ def extract_subs(files: list[Path]) -> None:
             sp.check_output(probe_cmd, stdin=sp.DEVNULL).decode("utf-8").splitlines()
         )
         logger.debug(probe)
+
         subs = [SubInfo._make(x) for sub in probe if len(x := sub.split(",")) == 3]
         for sub in [x for x in subs if x.lang in LIST_LANG]:
-            if "ass" in sub.codec:
-                executor.map(update_ASS_style, extract(sub, "ass"))
+            if "ass" == sub.codec:
+                fs.append(executor.submit(update_ASS_style, extract(sub, "ass")))
             elif sub.codec in ["subrip", "mov_text"]:
-                executor.map(SRT_to_ASS, extract(sub, "srt"))
-        merge_SRTs(list(file.rglob(f"{file.stem}*.srt")))
+                fs.append(executor.submit(SRT_to_ASS, extract(sub, "srt")))
+        wait(fs, return_when=ALL_COMPLETED)
+        merge_SRTs(out_subs)
 
 
 def main():
@@ -392,7 +410,9 @@ def main():
         logger.addHandler(ch)
 
     def get_files() -> list[Path]:
-        glob = lambda paths, pattern: [x for p in paths for x in p.glob(pattern)]
+        def glob(paths, pattern):
+            return [x for p in paths for x in p.glob(pattern)]
+
         paths = [Path(x).resolve() for x in ARGS.file]
         if ARGS.recurse:
             paths += glob(paths, "**")

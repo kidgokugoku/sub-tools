@@ -43,6 +43,32 @@ class CustomFormatter(logging.Formatter):
         return logging.Formatter(self.FORMATS.get(record.levelno)).format(record)
 
 
+class utils:
+    @staticmethod
+    def read_file(file: Path) -> str:
+        return file.read_text(encoding=chardet.detect(file.read_bytes())["encoding"])
+
+    @staticmethod
+    def isCJK(x):
+        return "一" <= x <= "龥"
+
+    @staticmethod
+    def has_jp(text: str) -> bool:
+        return any("\u3040" <= char <= "\u30f0" for char in text)
+
+    @staticmethod
+    def has_cjk(text: str) -> bool:
+        return any("一" <= char <= "龥" for char in text)
+
+    @staticmethod
+    def is_eng_only(text: str) -> bool:
+        return re.fullmatch("^[\\W\\sA-Za-z0-9_\\u00A0-\\u03FF]+$", text) is not None
+
+    @staticmethod
+    def is_exist(f: Path) -> bool:
+        return logger.warning(f"{f} exist") or not ARGS.force if f.is_file() else False
+
+
 class SRT:
     sub = namedtuple("sub", ["begin", "end", "content", "beginTime", "endTime"])
 
@@ -50,7 +76,7 @@ class SRT:
         self.content = content
 
     @classmethod
-    def fromFile(cls, file: Path, escape="\\N"):
+    def load(cls, file: Path, escape="\\N"):
         def time(rawtime: str) -> int:
             hour, minute, second, millisecond = map(int, re.split(r"[:,]", rawtime))
             return millisecond + 1000 * (second + (60 * (minute + 60 * hour)))
@@ -60,9 +86,11 @@ class SRT:
             return SRT.sub(begin, end, [escape.join(line[1:])], time(begin), time(end))
 
         RE = re.compile(r"\r?\n\r?\n\d+\r?\n")
-        return cls([process(x.splitlines()) for x in RE.split(read_file(file)[2:])])
+        return cls(
+            [process(x.splitlines()) for x in RE.split(utils.read_file(file)[2:])]
+        )
 
-    def __time_merge(self, content1: list[sub], content2: list[sub], time_shift=1000):
+    def _time_merge(self, content1: list[sub], content2: list[sub], time_shift=1000):
         merged_content = []
         while content1 and content2:
             if (
@@ -81,19 +109,16 @@ class SRT:
         return merged_content
 
     def merge_with(self, srt):
-        def isCJK(x):
-            return "一" <= x <= "龥"
-
         def cjk_percentage(z):
             all_text = "".join([x for y in z for x in y.content])
-            return sum(map(isCJK, all_text)) / (len(all_text) + 1)
+            return sum(map(utils.isCJK, all_text)) / (len(all_text) + 1)
 
         content1, content2 = self.content, srt.content
         if cjk_percentage(content1) < cjk_percentage(content2):
             content1, content2 = content2, content1
-        return SRT(self.__time_merge(content1, content2))
+        return SRT(self._time_merge(content1, content2))
 
-    def save_as(self, file: Path):
+    def dump(self, file: Path):
         output = [
             "\n".join([str(i), f"{line.begin} --> {line.end}", *line.content, ""])
             for i, line in enumerate(self.content, start=1)
@@ -110,7 +135,7 @@ class ASS:
     def from_ASS(cls, file: Path):
         # styles = []
         events = []
-        for line in [x for x in read_file(file).splitlines()]:
+        for line in [x for x in utils.read_file(file).splitlines()]:
             # styles += [cls.Style(line)] if line.startswith("Style:") else []
             events += [cls.Event(line)] if line.startswith("Dialogue:") else []
         return cls([], events)
@@ -126,11 +151,11 @@ class ASS:
 
         events = [
             cls.Event.fromSrt(ftime(x.begin), ftime(x.end), rm_style(x.content[0]))
-            for x in SRT.fromFile(file, escape="\\N").content
+            for x in SRT.load(file, escape="\\N").content
         ]
         return cls([], events)
 
-    def save(self, file: Path):
+    def dump(self, file: Path):
         output = """[Script Info]
 ScriptType: v4.00+
 [V4+ Styles]
@@ -142,20 +167,17 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
         file.write_text(output, encoding="utf-8")
 
     def update(self):
-        self.styles = [self.Style(style) for style in self.get_style().splitlines()]
+        self.styles = [style for style in self.get_style().splitlines()]
         second_style = self.get_2nd_style() if len(self.styles) > 1 else ""
         self.events = [
             e.update_style(second_style) for e in self.events if len(e.text) < 200
         ]
         return self
 
-    def is_eng_only(self, text: str) -> bool:
-        return re.fullmatch("^[\\W\\sA-Za-z0-9_\\u00A0-\\u03FF]+$", text) is not None
-
-    def _text(self) -> str:
+    def _all_text(self) -> str:
         return "".join([event.text for event in self.events])
 
-    def _text_2(self) -> str:
+    def _all_2nd_text(self) -> str:
         RE = re.compile(r"\{.*\}|[\W\s]")
         lines = [
             RE.sub("", x[-1])
@@ -163,37 +185,6 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
             if len(x := e.text.split("\\N", 1)) > 1
         ]
         return "".join(lines)
-
-    class Style:
-        def __init__(self, line: str):
-            (
-                self.name,
-                self.fontname,
-                self.fontsize,
-                self.primarycolour,
-                self.secondarycolour,
-                self.outlinecolour,
-                self.backcolour,
-                self.bold,
-                self.italic,
-                self.underline,
-                self.strikeout,
-                self.scalex,
-                self.scaley,
-                self.spacing,
-                self.angle,
-                self.borderstyle,
-                self.outline,
-                self.shadow,
-                self.alignment,
-                self.marginl,
-                self.marginr,
-                self.marginv,
-                self.encoding,
-            ) = line.split(":")[1].split(",")
-
-        def __str__(self):
-            return f"Style: {self.name},{self.fontname},{self.fontsize},{self.primarycolour},{self.secondarycolour},{self.outlinecolour},{self.backcolour},{self.bold},{self.italic},{self.underline},{self.strikeout},{self.scalex},{self.scaley},{self.spacing},{self.angle},{self.borderstyle},{self.outline},{self.shadow},{self.alignment},{self.marginl},{self.marginr},{self.marginv},{self.encoding}"
 
     class Event:
         def __init__(self, line: str):
@@ -208,28 +199,18 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
                 self.marginv,
                 self.effect,
                 self.text,
-            ) = (
-                line.split(":", 1)[1].strip().split(",", 9)
-            )
+            ) = line.split(":", 1)[1].strip().split(",", 9)
 
         @classmethod
         def fromSrt(cls, start_time, end_time, text):
             return cls(f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{text}")
-
-        @staticmethod
-        def has_jap(x: str) -> bool:
-            return re.search("[\\u3040-\\u30f0]", x) is not None
-
-        @staticmethod
-        def has_cjk(x: str) -> bool:
-            return re.search("[\\u4e00-\\u9fa5]", x) is not None
 
         def update_style(self, second_style: str):
             self.text = re.sub(r"\{.*?\}|<.*?>", "", self.text)
             texts = [EFFECT + t for t in self.text.split("\\N")]
             self.text = "\\N".join(
                 [
-                    t if self.has_cjk(t) and not self.has_jap(t) else second_style + t
+                    t if utils.has_cjk(t) and not utils.has_jp(t) else second_style + t
                     for t in texts
                 ]
             )
@@ -240,23 +221,15 @@ Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text
             return f"Dialogue: {self.layer},{self.start},{self.end},{self.style},{self.actor},{self.marginl},{self.marginr},{self.marginv},{self.effect},{self.text}"
 
     def get_style(self):
-        return STYLE_EN if self.is_eng_only(self._text()) else STYLE_DEFAULT
+        return STYLE_EN if self.is_eng_only(self._all_text()) else STYLE_DEFAULT
 
     def get_2nd_style(self):
-        if self.Event.has_jap(txt := self._text_2()):
+        if utils.has_jp(txt := self._all_2nd_text()):
             return STYLE_2_JP
         elif len(re.sub(r"[a-zA-Z]", "", txt)) / (len(txt) + 1) < 0.1:
             return STYLE_2_EN
         else:
             return ""
-
-
-def is_exist(f: Path) -> bool:
-    return logger.warning(f"{f} exist") or not ARGS.force if f.is_file() else False
-
-
-def read_file(file: Path) -> str:
-    return file.read_text(encoding=chardet.detect(file.read_bytes())["encoding"])
 
 
 def merge_SRTs(files: list[Path]):
@@ -269,11 +242,11 @@ def merge_SRTs(files: list[Path]):
             return
         if len([x for x in file1.suffixes[:-1] if x in file2.suffixes[:-1]]):
             return
-        if is_exist(new_file := file1.with_suffix("".join(file2.suffixes[:]))):
+        if utils.is_exist(new_file := file1.with_suffix("".join(file2.suffixes[:]))):
             return
         done_list.append([*file1.suffixes[:-1], *file2.suffixes[:-1]])
         logger.info(f"merging:\n{file1.name}\n&\n{file2.name}")
-        SRT.fromFile(file1).merge_with(SRT.fromFile(file2)).save_as(new_file)
+        SRT.load(file1).merge_with(SRT.load(file2)).dump(new_file)
         SRT_to_ASS(new_file)
 
     def stem(file: Path):
@@ -286,10 +259,10 @@ def merge_SRTs(files: list[Path]):
 
 
 def SRT_to_ASS(file: Path) -> None:
-    if not is_exist(new_file := file.with_suffix(".ass")):
+    if not utils.is_exist(new_file := file.with_suffix(".ass")):
         logger.info(f"Convert to ASS: {file.stem}\n")
         try:
-            ASS.from_SRT(file).update().save(new_file)
+            ASS.from_SRT(file).update().dump(new_file)
         except Exception as e:
             logger.warning(e)
             logger.error(f"FAILED Convert to ASS: {file.stem}\n")
@@ -297,7 +270,7 @@ def SRT_to_ASS(file: Path) -> None:
 
 def update_ASS_style(file: Path) -> None:
     logger.info(f"Updating style: {file.name}")
-    ASS.from_ASS(file).update().save(file)
+    ASS.from_ASS(file).update().dump(file)
 
 
 def extract_subs(files: list[Path]) -> None:
@@ -307,7 +280,9 @@ def extract_subs(files: list[Path]) -> None:
     out_subs = []
 
     def extract(sub: SubInfo, ext) -> Path:
-        if is_exist(out_sub := file.with_suffix(f".track{sub.index}.{sub.lang}.{ext}")):
+        if utils.is_exist(
+            out_sub := file.with_suffix(f".track{sub.index}.{sub.lang}.{ext}")
+        ):
             return []
         cmd = [
             "ffmpeg",

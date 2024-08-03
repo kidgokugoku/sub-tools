@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
-import argparse
-import logging
-import re
+import argparse, logging, re
+from dataclasses import dataclass, field
 from collections import namedtuple
-from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List
 from tqdm import tqdm
 from pathlib import Path
+import subprocess as sp
+from itertools import groupby, combinations
 
 import chardet
 
@@ -17,404 +19,372 @@ STYLE_2_JP = "{\\rJPN}"
 STYLE_EN = "Style: Default,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.3,3,2,30,30,20,1"
 ARGS = ""
 LIST_LANG = [
-    "eng",
-    "chi",
-    "zho",
-    "jpn",
+  "eng",
+  "chi",
+  "zho",
+  "jpn",
 ]  # "jpn", "spa"  # LIST_LANG  需要提取的字幕语言的ISO639代码列表
 EFFECT = "{\\blur3}"
 logger = logging.getLogger("sub_tools")
-executor = ThreadPoolExecutor(max_workers=None)
 
 
 class CustomFormatter(logging.Formatter):
-    reset = "\x1b[0m"
-    format = "%(levelname)s - %(message)s"
-    debug_format = "%(thread)d - %(asctime)s - %(levelname)s - %(message)s \n(%(filename)s:%(lineno)d)"
-    FORMATS = {
-        logging.DEBUG: (grey := "\x1b[38;20m") + debug_format + reset,
-        logging.INFO: (green := "\x1b[32m") + format + reset,
-        logging.WARNING: (yellow := "\x1b[33;20m") + debug_format + reset,
-        logging.ERROR: (red := "\x1b[31;20m") + debug_format + reset,
-        logging.CRITICAL: (bold_red := "\x1b[31;1m") + format + reset,
-    }
+  reset = "\x1b[0m"
+  fmt = "%(levelname)s - %(message)s"
+  debug_format = "%(asctime)s - %(levelname)s - %(message)s \n(%(filename)s:%(lineno)d)"
+  FORMATS = {
+    logging.DEBUG: (grey := "\x1b[38;20m") + debug_format + reset,
+    logging.INFO: (green := "\x1b[32m") + fmt + reset,
+    logging.WARNING: (yellow := "\x1b[33;20m") + debug_format + reset,
+    logging.ERROR: (red := "\x1b[31;20m") + debug_format + reset,
+    logging.CRITICAL: (bold_red := "\x1b[31;1m") + fmt + reset,
+  }
 
-    def format(self, record):
-        return logging.Formatter(self.FORMATS.get(record.levelno)).format(record)
-
-
-class utils:
-    @staticmethod
-    def read_file(file: Path) -> str:
-        return file.read_text(encoding=chardet.detect(file.read_bytes())["encoding"])
-
-    @staticmethod
-    def isCJK(x):
-        return "一" <= x <= "龥"
-
-    @staticmethod
-    def has_jp(text: str) -> bool:
-        return any("\u3040" <= char <= "\u30f0" for char in text)
-
-    @staticmethod
-    def has_cjk(text: str) -> bool:
-        return any("一" <= char <= "龥" for char in text)
-
-    @staticmethod
-    def is_eng_only(text: str) -> bool:
-        return re.fullmatch("^[\\W\\sA-Za-z0-9_\\u00A0-\\u03FF]+$", text) is not None
-
-    @staticmethod
-    def is_exist(f: Path) -> bool:
-        return logger.warning(f"{f} exist") or not ARGS.force if f.is_file() else False
+  def format(self, record):
+    return logging.Formatter(self.FORMATS.get(record.levelno)).format(record)
 
 
+def read_file(file: Path) -> str:
+  return file.read_text(encoding=chardet.detect(file.read_bytes())["encoding"])
+
+
+def isCJK(x: str) -> bool:
+  return "\u4e00" <= x <= "\u9fff"
+
+
+def has_jp(text: str) -> bool:
+  return any("\u3040" <= char <= "\u30f0" for char in text)
+
+
+def has_cjk(text: str) -> bool:
+  return any(isCJK(char) for char in text)
+
+
+def is_eng_only(text: str) -> bool:
+  return re.fullmatch("^[\\W\\sA-Za-z0-9_\\u00A0-\\u03FF]+$", text) is not None
+
+
+def is_exist(f: Path, force: bool = False) -> bool:
+  return logger.warning(f"{f} exist") or not force if f.is_file() else False
+
+
+@dataclass
+class SubtitleLine:
+  begin: str
+  end: str
+  content: List[str]
+  begin_time: int
+  end_time: int
+
+  @classmethod
+  def from_srt(cls, begin: str, end: str, content: List[str]):
+    return cls(begin, end, content, cls.time_to_ms(begin), cls.time_to_ms(end))
+
+  @staticmethod
+  def time_to_ms(rawtime: str) -> int:
+    hour, minute, second, millisecond = map(int, re.split(r"[:,]", rawtime))
+    return millisecond + 1000 * (second + (60 * (minute + 60 * hour)))
+
+
+@dataclass
 class SRT:
-    sub = namedtuple("sub", ["begin", "end", "content", "beginTime", "endTime"])
+  content: List[SubtitleLine] = field(default_factory=list)
 
-    def __init__(self, content) -> None:
-        self.content = content
+  @classmethod
+  def load(cls, file: Path, escape="\\N"):
+    content = []
+    for chunk in re.split(r"\r?\n\r?\n\d+\r?\n", read_file(file)[2:]):
+      lines = chunk.splitlines()
+      begin, end = lines[0].strip().split(" --> ")
+      content.append(SubtitleLine.from_srt(begin, end, [escape.join(lines[1:])]))
+    return cls(content)
 
-    @classmethod
-    def load(cls, file: Path, escape="\\N"):
-        def time(rawtime: str) -> int:
-            hour, minute, second, millisecond = map(int, re.split(r"[:,]", rawtime))
-            return millisecond + 1000 * (second + (60 * (minute + 60 * hour)))
+  def merge_with(self, srt: "SRT", time_shift: int = 1000) -> "SRT":
+    def cjk_percentage(z):
+      all_text = "".join([x for y in z for x in y.content])
+      return sum(map(isCJK, all_text)) / (len(all_text) + 1)
 
-        def process(line: list[str]) -> SRT.sub:
-            begin, end = line[0].strip().split(" --> ")
-            return SRT.sub(begin, end, [escape.join(line[1:])], time(begin), time(end))
+    content1, content2 = self.content, srt.content
+    if cjk_percentage(content1) < cjk_percentage(content2):
+      content1, content2 = content2, content1
 
-        RE = re.compile(r"\r?\n\r?\n\d+\r?\n")
-        return cls(
-            [process(x.splitlines()) for x in RE.split(utils.read_file(file)[2:])]
-        )
+    merged_content = []
+    i, j = 0, 0
+    while i < len(content1) and j < len(content2):
+      if content1[i].begin_time - time_shift <= content2[j].begin_time and content1[i].end_time + time_shift >= content2[j].end_time:
+        content1[i].content.extend(content2[j].content)
+        j += 1
+      elif content1[i].begin_time < content2[j].begin_time:
+        merged_content.append(content1[i])
+        i += 1
+      else:
+        merged_content.append(content2[j])
+        j += 1
 
-    def _time_merge(self, content1: list[sub], content2: list[sub], time_shift=1000):
-        merged_content = []
-        while content1 and content2:
-            if (
-                content1[0].beginTime - time_shift <= content2[0].beginTime
-                and content1[0].endTime + time_shift >= content2[0].endTime
-            ):
-                content1[0] = content1[0]._replace(
-                    content=content1[0].content + content2.pop(0).content
-                )
-                continue
-            if content1[0].beginTime < content2[0].beginTime:
-                merged_content.append(content1.pop(0))
-            else:  # content1[0].beginTime > content2[0].beginTime
-                merged_content.append(content2.pop(0))
-        merged_content.extend([*content1, *content2])
-        return merged_content
+    merged_content.extend(content1[i:])
+    merged_content.extend(content2[j:])
+    return SRT(merged_content)
 
-    def merge_with(self, srt):
-        def cjk_percentage(z):
-            all_text = "".join([x for y in z for x in y.content])
-            return sum(map(utils.isCJK, all_text)) / (len(all_text) + 1)
-
-        content1, content2 = self.content, srt.content
-        if cjk_percentage(content1) < cjk_percentage(content2):
-            content1, content2 = content2, content1
-        return SRT(self._time_merge(content1, content2))
-
-    def dump(self, file: Path):
-        output = [
-            "\n".join([str(i), f"{line.begin} --> {line.end}", *line.content, ""])
-            for i, line in enumerate(self.content, start=1)
-        ]
-        file.write_text("\n".join(output), encoding="utf-8")
+  def dump(self, file: Path):
+    output = ["\n".join([str(i), f"{line.begin} --> {line.end}", *line.content, ""]) for i, line in enumerate(self.content, start=1)]
+    file.write_text("\n".join(output), encoding="utf-8")
 
 
+@dataclass
+class ASSEvent:
+  layer: str = ""
+  start: str = ""
+  end: str = ""
+  style: str = "Default"
+  actor: str = ""
+  marginl: int = 0
+  marginr: int = 0
+  marginv: int = 0
+  effect: str = ""
+  text: str = ""
+
+  @classmethod
+  def from_string(cls, s: str):
+    fields = s.split(":", 1)[1].strip().split(",", 9)
+    return cls(*fields)
+
+  def update_style(self, second_style: str):
+    self.text = re.sub(r"\{.*?\}|<.*?>", "", self.text)
+    self.text = "\\N".join([t if has_cjk(t) and not has_jp(t) else second_style + t for t in [EFFECT + t for t in self.text.split("\\N")]])
+    self.style = "Default"
+    return self
+
+  def __str__(self):
+    return f"Dialogue: {self.layer},{self.start},{self.end},{self.style},{self.actor},{self.marginl},{self.marginr},{self.marginv},{self.effect},{self.text}"
+
+
+@dataclass
 class ASS:
-    def __init__(self, styles, events):
-        self.styles = styles
-        self.events = events
+  styles: List[str] = field(default_factory=list)
+  events: List[ASSEvent] = field(default_factory=list)
 
-    @classmethod
-    def from_ASS(cls, file: Path):
-        # styles = []
-        events = []
-        for line in [x for x in utils.read_file(file).splitlines()]:
-            # styles += [cls.Style(line)] if line.startswith("Style:") else []
-            events += [cls.Event(line)] if line.startswith("Dialogue:") else []
-        return cls([], events)
+  def __init__(self, styles, events):
+    self.styles = styles
+    self.events = events
 
-    @classmethod
-    def from_SRT(cls, file: Path):
-        def rm_style(line):
-            line = re.sub(r"<([ubi])>", r"{\\\1}", line)
-            return re.sub(r'<font\s+color="?(\w*?)"?>|</font>|</([ubi])>', "", line)
+  @classmethod
+  def load(cls, file: Path):
+    if file.suffix == ".srt":
+      return cls.from_SRT(file)
+    return cls.from_ASS(file)
 
-        def ftime(x):
-            return x.replace(",", ".")[:-1]
+  @classmethod
+  def from_ASS(cls, file: Path):
+    content = read_file(file).splitlines()
+    styles = [line for line in content if line.startswith("Style:")]
+    events = [ASSEvent.from_string(line) for line in content if line.startswith("Dialogue:")]
+    return cls(styles, events)
 
-        events = [
-            cls.Event.fromSrt(ftime(x.begin), ftime(x.end), rm_style(x.content[0]))
-            for x in SRT.load(file, escape="\\N").content
-        ]
-        return cls([], events)
+  @classmethod
+  def from_SRT(cls, file: Path):
+    def rm_style(line):
+      line = re.sub(r"<([ubi])>", r"{\\\1}", line)
+      return re.sub(r'<font\s+color="?(\w*?)"?>|</font>|</([ubi])>', "", line)
 
-    def dump(self, file: Path):
-        output = """[Script Info]
+    def ftime(x):
+      return x.replace(",", ".")[:-1]
+
+    srt = SRT.load(file)
+    events = [ASSEvent(start=ftime(x.begin), end=ftime(x.end), text=rm_style(x.content[0])) for x in srt.content]
+    return cls([], events)
+
+  def dump(self, file: Path):
+    output = """[Script Info]
 ScriptType: v4.00+
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"""
-        output += "\n".join(map(str, self.styles))
-        output += """\n[Events]
+    output += "\n".join(map(str, self.styles))
+    output += """\n[Events]
 Format: Layer, Start, End, Style, Actor, MarginL, MarginR, MarginV, Effect, Text\n"""
-        output += "\n".join(map(str, self.events))
-        file.write_text(output, encoding="utf-8")
+    output += "\n".join(map(str, self.events))
+    file.write_text(output, encoding="utf-8")
 
-    def update(self):
-        self.styles = [style for style in self.get_style().splitlines()]
-        second_style = self.get_2nd_style() if len(self.styles) > 1 else ""
-        self.events = [
-            e.update_style(second_style) for e in self.events if len(e.text) < 200
-        ]
-        return self
+  def update(self):
+    self.styles = [style for style in self.get_style().splitlines()]
+    second_style = self.get_2nd_style() if len(self.styles) > 1 else ""
+    self.events = [e.update_style(second_style) for e in self.events if len(e.text) < 200]
+    return self
 
-    def _all_text(self) -> str:
-        return "".join([event.text for event in self.events])
+  def _all_text(self) -> str:
+    return "".join([event.text for event in self.events])
 
-    def _all_2nd_text(self) -> str:
-        RE = re.compile(r"\{.*\}|[\W\s]")
-        lines = [
-            RE.sub("", x[-1])
-            for e in self.events
-            if len(x := e.text.split("\\N", 1)) > 1
-        ]
-        return "".join(lines)
+  def _all_2nd_text(self) -> str:
+    RE = re.compile(r"\{.*\}|[\W\s]")
+    lines = [RE.sub("", x[-1]) for e in self.events if len(x := e.text.split("\\N", 1)) > 1]
+    return "".join(lines)
 
-    class Event:
-        def __init__(self, line: str):
-            (
-                self.layer,
-                self.start,
-                self.end,
-                self.style,
-                self.actor,
-                self.marginl,
-                self.marginr,
-                self.marginv,
-                self.effect,
-                self.text,
-            ) = line.split(":", 1)[1].strip().split(",", 9)
+  def get_style(self):
+    return STYLE_EN if is_eng_only(self._all_text()) else STYLE_DEFAULT
 
-        @classmethod
-        def fromSrt(cls, start_time, end_time, text):
-            return cls(f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{text}")
-
-        def update_style(self, second_style: str):
-            self.text = re.sub(r"\{.*?\}|<.*?>", "", self.text)
-            texts = [EFFECT + t for t in self.text.split("\\N")]
-            self.text = "\\N".join(
-                [
-                    t if utils.has_cjk(t) and not utils.has_jp(t) else second_style + t
-                    for t in texts
-                ]
-            )
-            self.style = "Default"
-            return self
-
-        def __str__(self):
-            return f"Dialogue: {self.layer},{self.start},{self.end},{self.style},{self.actor},{self.marginl},{self.marginr},{self.marginv},{self.effect},{self.text}"
-
-    def get_style(self):
-        return STYLE_EN if self.is_eng_only(self._all_text()) else STYLE_DEFAULT
-
-    def get_2nd_style(self):
-        if utils.has_jp(txt := self._all_2nd_text()):
-            return STYLE_2_JP
-        elif len(re.sub(r"[a-zA-Z]", "", txt)) / (len(txt) + 1) < 0.1:
-            return STYLE_2_EN
-        else:
-            return ""
+  def get_2nd_style(self):
+    if has_jp(txt := self._all_2nd_text()):
+      return STYLE_2_JP
+    elif len(re.sub(r"[a-zA-Z]", "", txt)) / (len(txt) + 1) < 0.1:
+      return STYLE_2_EN
+    else:
+      return ""
 
 
-def merge_SRTs(files: list[Path]):
-    from itertools import groupby, combinations
+class SubtitleProcessor:
+  def __init__(self, force: bool = False):
+    self.force = force
+    self.executor = ThreadPoolExecutor(max_workers=None)
 
-    done_list = []
-
+  def merge_SRTs(self, files: List[Path]):
     def merge(file1: Path, file2: Path):
-        if file1.suffixes[:-1] in done_list or file2.suffixes[:-1] in done_list:
-            return
-        if len([x for x in file1.suffixes[:-1] if x in file2.suffixes[:-1]]):
-            return
-        if utils.is_exist(new_file := file1.with_suffix("".join(file2.suffixes[:]))):
-            return
-        done_list.append([*file1.suffixes[:-1], *file2.suffixes[:-1]])
-        logger.info(f"merging:\n{file1.name}\n&\n{file2.name}")
-        SRT.load(file1).merge_with(SRT.load(file2)).dump(new_file)
-        SRT_to_ASS(new_file)
+      if file1.suffixes[:-1] in done_list or file2.suffixes[:-1] in done_list:
+        return
+      if len([x for x in file1.suffixes[:-1] if x in file2.suffixes[:-1]]):
+        return
+      new_file = file1.with_suffix("".join(file2.suffixes[:]))
+      if is_exist(new_file, self.force):
+        return
+      done_list.append([*file1.suffixes[:-1], *file2.suffixes[:-1]])
+      logger.info(f"merging:\n{file1.name}\n&\n{file2.name}")
+      SRT.load(file1).merge_with(SRT.load(file2)).dump(new_file)
+      self.SRT_to_ASS(new_file)
 
     def stem(file: Path):
-        return str(file).split(".")[0]
+      return str(file).split(".")[0]
 
     for _, g in groupby(sorted(files, key=stem), key=stem):
-        group = list(g)
-        done_list = [suffix for f in group if len(suffix := f.suffixes[:-1]) > 2]
-        [executor.submit(merge, *tup) for tup in combinations(group, 2)]
+      group = list(g)
+      done_list = [suffix for f in group if len(suffix := f.suffixes[:-1]) > 2]
+      fs = [self.executor.submit(merge, *tup) for tup in combinations(group, 2)]
+      for future in as_completed(fs):
+        future.result()
 
+  def SRT_to_ASS(self, file: Path) -> None:
+    if not is_exist(new_file := file.with_suffix(".ass"), self.force):
+      logger.info(f"Convert to ASS: {file.stem}\n")
+      try:
+        ASS.load(file).update().dump(new_file)
+      except Exception as e:
+        logger.warning(e)
+        logger.error(f"FAILED Convert to ASS: {file.stem}\n")
 
-def SRT_to_ASS(file: Path) -> None:
-    if not utils.is_exist(new_file := file.with_suffix(".ass")):
-        logger.info(f"Convert to ASS: {file.stem}\n")
-        try:
-            ASS.from_SRT(file).update().dump(new_file)
-        except Exception as e:
-            logger.warning(e)
-            logger.error(f"FAILED Convert to ASS: {file.stem}\n")
-
-
-def update_ASS_style(file: Path) -> None:
+  def update_ASS_style(self, file: Path) -> None:
     logger.info(f"Updating style: {file.name}")
-    ASS.from_ASS(file).update().dump(file)
+    ASS.load(file).update().dump(file)
 
-
-def extract_subs(files: list[Path]) -> None:
-    import subprocess as sp
-
+  def extract_subs(self, files: List[Path]) -> None:
     SubInfo = namedtuple("SubInfo", ["index", "codec", "lang"])
     out_subs = []
 
-    def extract(sub: SubInfo, ext) -> Path:
-        if utils.is_exist(
-            out_sub := file.with_suffix(f".track{sub.index}.{sub.lang}.{ext}")
-        ):
-            return []
-        cmd = [
-            "ffmpeg",
-            "-an",
-            "-vn",
-            "-y",
-            "-i",
-            file,
-            "-map",
-            f"0:{sub.index}",
-            out_sub,
-        ]
-        sp.run(
-            cmd,
-            stderr=sp.DEVNULL,
-            stdout=sp.DEVNULL,
-            stdin=sp.DEVNULL,
-        )
-        out_subs.append(out_sub)
-        return out_sub
+    def extract(file: Path, sub: SubInfo, ext: str) -> Path:
+      if is_exist(
+        out_sub := file.with_suffix(f".track{sub.index}.{sub.lang}.{ext}"),
+        self.force,
+      ):
+        return None
+      cmd = [
+        "ffmpeg -an -vn -y -i",
+        str(file),
+        f"-map 0:{sub.index}",
+        str(out_sub),
+      ]
+      sp.run(cmd, stderr=sp.DEVNULL, stdout=sp.DEVNULL, stdin=sp.DEVNULL)
+      out_subs.append(out_sub)
+      return out_sub
 
     for file in tqdm(files, position=0):
-        fs = []
-        logger.info(f"extracting: {file.name}")
-        probe_cmd = [
-            "ffprobe",
-            file,
-            "-select_streams",
-            "s",
-            "-show_entries",
-            "stream=index:stream_tags=language:stream=codec_name",
-            "-v",
-            "quiet",
-            "-of",
-            "csv=p=0",
-        ]
-        probe = (
-            sp.check_output(probe_cmd, stdin=sp.DEVNULL).decode("utf-8").splitlines()
-        )
-        logger.debug(probe)
+      fs = []
+      logger.info(f"extracting: {file.name}")
+      probe_cmd = [
+        "ffprobe",
+        str(file),
+        "-select_streams s",
+        "-show_entries stream=index:stream_tags=language:stream=codec_name",
+        "-v quiet",
+        "-of csv=p=0",
+      ]
+      probe = sp.check_output(probe_cmd, stdin=sp.DEVNULL).decode("utf-8").splitlines()
+      logger.debug(probe)
 
-        subs = [SubInfo._make(x) for sub in probe if len(x := sub.split(",")) == 3]
-        for sub in [x for x in subs if x.lang in LIST_LANG]:
-            if "ass" == sub.codec:
-                fs.append(executor.submit(update_ASS_style, extract(sub, "ass")))
-            elif sub.codec in ["subrip", "mov_text"]:
-                fs.append(executor.submit(SRT_to_ASS, extract(sub, "srt")))
-        wait(fs, return_when=ALL_COMPLETED)
-        merge_SRTs(out_subs)
+      subs = [SubInfo(*x.split(",")) for x in probe if len(x.split(",")) == 3]
+
+      for sub in [x for x in subs if x.lang in LIST_LANG]:
+        if sub.codec == "ass":
+          if out_sub := extract(file, sub, "ass"):
+            fs.append(self.executor.submit(self.update_ASS_style, out_sub))
+        elif sub.codec in ["subrip", "mov_text"]:
+          if out_sub := extract(file, sub, "srt"):
+            fs.append(self.executor.submit(self.SRT_to_ASS, out_sub))
+      for future in as_completed(fs):
+        future.result()
+      self.merge_SRTs(out_subs)
 
 
 def main():
-    def load_args() -> None:
-        parser = argparse.ArgumentParser()
-        parser.add_argument(
-            "file",
-            help="files, default all files in current folder",
-            nargs="*",
-            default=".",
-        )
-        parser.add_argument(
-            "-r", "--recurse", help="process all .srt/.ass", action="store_true"
-        )
-        parser.add_argument(
-            "-f",
-            "--force",
-            help="force operation and overwrite existing files",
-            action="store_true",
-        )
-        parser.add_argument(
-            "-v", "--verbose", help="show debug information", action="store_true"
-        )
-        parser.add_argument(
-            "-q", "--quite", help="show less information", action="store_true"
-        )
-        group = parser.add_mutually_exclusive_group()
-        group.add_argument(
-            "-u", "--update-ass", help="update .ass style", action="store_true"
-        )
-        group.add_argument("-m", "--merge-srt", help="merge srts", action="store_true")
-        group.add_argument(
-            "-e",
-            "--extract-sub",
-            help="extract subtitles from .mkv",
-            action="store_true",
-        )
-        global ARGS
-        ARGS = parser.parse_args()
-        logger.debug(ARGS)
+  parser = argparse.ArgumentParser(description="Subtitle Processing Tool")
+  parser.add_argument("file", nargs="*", default=".", help="files or directories to process")
+  parser.add_argument("-r", "--recurse", action="store_true", help="process all .srt/.ass recursively")
+  parser.add_argument(
+    "-f",
+    "--force",
+    action="store_true",
+    help="force operation and overwrite existing files",
+  )
+  parser.add_argument("-v", "--verbose", action="store_true", help="show debug information")
+  parser.add_argument("-q", "--quiet", action="store_true", help="show less information")
 
-    def init_logger() -> None:
-        logger.setLevel(logging.INFO)
-        if ARGS.verbose:
-            logger.setLevel(logging.DEBUG)
-        if ARGS.quite:
-            logger.setLevel(logging.ERROR)
-        ch = logging.StreamHandler()
-        ch.setLevel(logging.DEBUG)
-        ch.setFormatter(CustomFormatter())
-        logger.addHandler(ch)
+  group = parser.add_mutually_exclusive_group()
+  group.add_argument("-u", "--update-ass", action="store_true", help="update .ass style")
+  group.add_argument("-m", "--merge-srt", action="store_true", help="merge srts")
+  group.add_argument("-e", "--extract-sub", action="store_true", help="extract subtitles from .mkv")
 
-    def get_files() -> list[Path]:
-        def glob(paths, pattern):
-            return [x for p in paths for x in p.glob(pattern)]
+  args = parser.parse_args()
 
-        paths = [Path(x).resolve() for x in ARGS.file]
-        if ARGS.recurse:
-            paths += glob(paths, "**")
-        if ARGS.update_ass:
-            paths += glob(paths, "*.ass")
-        elif ARGS.extract_sub:
-            paths += glob(paths, "*.mkv") + glob(paths, "*.mp4")
-        else:
-            paths += glob(paths, "*.srt")
-        paths = [x for x in list(set(paths)) if x.is_file()]
-        logger.debug(paths)
-        logger.info(f"found {len(paths)} files")
-        return paths
+  # Setup logging
+  log_level = logging.INFO
+  if args.verbose:
+    log_level = logging.DEBUG
+  elif args.quiet:
+    log_level = logging.ERROR
 
-    load_args()
-    init_logger()
-    files = get_files()
-    if ARGS.update_ass:
-        list(tqdm(executor.map(update_ASS_style, files), total=len(files)))
-    elif ARGS.extract_sub:
-        extract_subs(files)
-    elif ARGS.merge_srt:
-        merge_SRTs(files)
-    else:
-        list(tqdm(executor.map(SRT_to_ASS, files), total=len(files)))
-    return
+  ch = logging.StreamHandler()
+  ch.setLevel(log_level)
+  ch.setFormatter(CustomFormatter())
+  logger.addHandler(ch)
+
+  # Get files
+  def get_files(paths, pattern):
+    return [x for p in paths for x in Path(p).rglob(pattern) if x.is_file()]
+
+  paths = [Path(x).resolve() for x in args.file]
+  if args.recurse:
+    paths = get_files(paths, "*")
+
+  if args.update_ass:
+    files = get_files(paths, "*.ass")
+  elif args.extract_sub:
+    files = get_files(paths, "*.mkv") + get_files(paths, "*.mp4")
+  else:
+    files = get_files(paths, "*.srt")
+
+  files = list(set(files + [p for p in paths if p.is_file()]))
+  logger.info(f"Found {len(files)} files")
+
+  processor = SubtitleProcessor(force=args.force)
+  if args.update_ass:
+    list(
+      tqdm(
+        processor.executor.map(processor.update_ASS_style, files),
+        total=len(files),
+      )
+    )
+  elif args.extract_sub:
+    processor.extract_subs(files)
+  elif args.merge_srt:
+    processor.merge_SRTs(files)
+  else:
+    list(tqdm(processor.executor.map(processor.SRT_to_ASS, files), total=len(files)))
 
 
 if __name__ == "__main__":
-    main()
+  main()

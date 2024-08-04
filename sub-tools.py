@@ -1,3 +1,4 @@
+import dataclasses
 from itertools import product
 import argparse, re
 from dataclasses import dataclass, field
@@ -59,11 +60,13 @@ class SRT:
 
   def merge_with(self, srt: "SRT", shift: int = 1000) -> "SRT":
     def cjk_percentage(z):return sum(map(isCJK, "".join(sum([y.text for y in z],[])))) / (len("".join(sum([y.text for y in z],[]))) + 1)
-    sub1, sub2 = self.content, srt.content if cjk_percentage(sub1:=self.content) < cjk_percentage(sub2:=srt.content) else sub2, sub1
+    sub1, sub2 = self.content, srt.content
+    if not cjk_percentage(sub1:=self.content) < cjk_percentage(sub2:=srt.content):
+      sub1, sub2 =sub2, sub1
     merged_content = []
     while sub1 and sub2:
       if sub1[0].begin_ms - shift <= sub2[0].begin_ms and sub1[0].end_ms + shift >= sub2[0].end_ms:
-        sub1[0] = sub1[0]._replace(text=sub1[0].text + sub2.pop(0).text)
+        dataclasses.replace(sub1[0], text=sub1[0].text + sub2.pop(0).text)
       elif sub1[0].begin_ms < sub2[0].begin_ms: merged_content.append(sub1.pop(0))
       else: merged_content.append(sub2.pop(0)) # content1[0].begin_ms > content2[0].begin_ms
     merged_content.extend([*sub1, *sub2])
@@ -103,7 +106,7 @@ class ASS:
   events: List[ASSEvent] = field(default_factory=list)
 
   @classmethod
-  def load(cls, file: Path): return cls.from_SRT_file(file) if file.suffix == ".srt" else cls.from_ASS_file(file)
+  def load(cls, file: Path): return cls.from_SRT(file) if file.suffix == ".srt" else cls.from_ASS_file(file)
 
   @classmethod
   def from_ASS_file(cls, file: Path):
@@ -114,13 +117,11 @@ class ASS:
     return cls(styles, events)
 
   @classmethod
-  def from_SRT_file(cls, file: Path):
+  def from_SRT(cls, file):
     def rm_style(line): return re.sub(r'<font\s+color="?(\w*?)"?>|</font>|</([ubi])>', "", re.sub(r"<([ubi])>", r"{\\\1}", line))
     def ftime(x): return x.replace(",", ".")[:-1]
-    return cls([], [ASSEvent(start=ftime(e.begin), end=ftime(e.end), text=rm_style(e.text[0])) for e in SRT.load(file).content])
-
-  @classmethod
-  def from_SRT(cls, srt: SRT): return cls([], [ASSEvent(start=e.begin, end=e.end, text=e.text) for e in srt.content])
+    srt = SRT.load(file) if isinstance(file, Path) else file
+    return cls([], [ASSEvent(start=ftime(e.begin), end=ftime(e.end), text=rm_style(e.text[0])) for e in srt.content])
 
   def dump(self, file: Path):
     output = """[Script Info]
@@ -148,18 +149,18 @@ class SubtitleProcessor:
   def __init__(self, force: bool = False): self.force, self.executor = force, ThreadPoolExecutor(max_workers=None)
 
   def merge_SRTs (self, f1: Path, f2: Path):
-      if is_exist(new_file:=f1.with_stem(f1.stem+f2.stem.split("__")[-1]), self.force): return
+      if is_exist(new_file:=f1.with_name(f1.stem+'_'+f2.stem.split("__")[-1]+'.ass'), self.force): return
+      print(f"merging:{ f1.name }& {f2.name} as {new_file.name}")
       ASS.from_SRT(SRT.load(f1).merge_with(SRT.load(f2))).update().dump(new_file)
 
   def merge_SRTs_by_dict(self, file_dict: Dict[str,List[Path]]):
     lang_pairs = [(f1, f2) for lang, lang2 in MERGE_LIST for f1 in file_dict[lang] for f2 in file_dict[lang2]]
-    wait([self.executor.submit(self.merge_SRTs, f1, f2) for f1, f2 in lang_pairs])
+    [self.merge_SRTs(f1,f2) for f1, f2 in lang_pairs]
+    # wait([self.executor.submit(self.merge_SRTs, f1, f2) for f1, f2 in lang_pairs])
 
   def SRT_to_ASS(self, file: Path) -> None:
     if is_exist(new_file := file.with_suffix(".ass"), self.force): return
-    # try:
     ASS.load(file).update().dump(new_file)
-    # except Exception as e: print(f"FAILED Convert to ASS: {file.stem}\n", e)
 
   def update_ASS_style(self, file: Path) -> None: print(f"Updating style: {file.name}") or ASS.load(file).update().dump(file)
 
@@ -169,7 +170,7 @@ class SubtitleProcessor:
 
     def extract(file: Path, sub: SubInfo, ext: str) -> Path:
       if is_exist(out_sub := file.with_name(f"{file.stem}__track{sub.index}_{sub.lang}.{ext}"), self.force): return None
-      sp.run(["ffmpeg","-an","-vn","-y","-i", str(file),"-map",f"0:{sub.index}", str(out_sub)], stderr=sp.DEVNULL, stdout=sp.DEVNULL, stdin=sp.DEVNULL)
+      sp.run(["ffmpeg","-an","-vn","-y","-i",str(file),"-map",f"0:{sub.index}", str(out_sub)], stderr=sp.DEVNULL, stdout=sp.DEVNULL, stdin=sp.DEVNULL)
       out_subs[sub.lang].append(out_sub)
       return out_sub
 
@@ -182,6 +183,7 @@ class SubtitleProcessor:
         if sub.codec == "ass" and (out_sub := extract(file, sub, "ass")): fs.append(self.executor.submit(self.update_ASS_style, out_sub))
         elif sub.codec in ["subrip", "mov_text"] and (out_sub := extract(file, sub, "srt")): fs.append(self.executor.submit(self.SRT_to_ASS, out_sub))
       wait(fs)
+      print(out_subs.items())
       self.merge_SRTs_by_dict(out_subs)
 
 

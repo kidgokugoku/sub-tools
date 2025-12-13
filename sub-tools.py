@@ -1,4 +1,3 @@
-import dataclasses
 from itertools import product
 import argparse, re
 from dataclasses import dataclass, field
@@ -11,15 +10,15 @@ import subprocess as sp
 
 import chardet
 
-STYLE_DEFAULT = """Style: Default,GenYoMin TW H,23,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,90,100,0.1,0,1,1,3,2,30,30,15,1
-Style: ENG,GenYoMin TW B,11,&H003CA8DC,&H000000FF,&H00000000,&H00000000,1,0,0,0,90,100,0,0,1,1,2,2,30,30,10,1
-Style: JPN,GenYoMin JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,1,2,2,30,30,10,1"""
+STYLE_DEFAULT = """Style: Default,源樣黑體月 B,22,&H00AAE2E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,90,100,0.1,0,1,1,3,2,30,30,15,1
+Style: ENG,源樣黑體月 B,11,&H003CA8DC,&H000000FF,&H00000000,&H00000000,1,0,0,0,90,100,0,0,1,1,2,2,30,30,10,1
+Style: JPN,GenYoMin2 JP B,15,&H003CA8DC,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,1,2,2,30,30,10,1"""
 STYLE_2_EN = "{\\rENG}"
 STYLE_2_JP = "{\\rJPN}"
 STYLE_EN = "Style: Default,Verdana,18,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,90,100,0,0,1,0.3,3,2,30,30,20,1"
 EFFECT = "{\\blur3}"
 EXTRACT_LIST = ["eng", "chi", "zho", "jpn"]  # "jpn", "spa"  # LIST_LANG  需要提取的字幕语言的ISO639代码列表
-MERGE_LIST = product(["chi", "zho"], ["eng", "jpn"])
+MERGE_LIST = list(product(["chi", "zho"], ["eng", "jpn"]))
 
 
 # fmt:off
@@ -61,12 +60,12 @@ class SRT:
   def merge_with(self, srt: "SRT", shift: int = 1000) -> "SRT":
     def cjk_percentage(z):return sum(map(isCJK, "".join(sum([y.text for y in z],[])))) / (len("".join(sum([y.text for y in z],[]))) + 1)
     sub1, sub2 = self.content, srt.content
-    if not cjk_percentage(sub1:=self.content) < cjk_percentage(sub2:=srt.content):
-      sub1, sub2 =sub2, sub1
+    if not cjk_percentage(sub1:=self.content) > cjk_percentage(sub2:=srt.content):
+      sub1, sub2 = sub2, sub1
     merged_content = []
     while sub1 and sub2:
       if sub1[0].begin_ms - shift <= sub2[0].begin_ms and sub1[0].end_ms + shift >= sub2[0].end_ms:
-        dataclasses.replace(sub1[0], text=sub1[0].text + sub2.pop(0).text)
+        sub1[0].text=sub1[0].text + sub2.pop(0).text
       elif sub1[0].begin_ms < sub2[0].begin_ms: merged_content.append(sub1.pop(0))
       else: merged_content.append(sub2.pop(0)) # content1[0].begin_ms > content2[0].begin_ms
     merged_content.extend([*sub1, *sub2])
@@ -121,7 +120,7 @@ class ASS:
     def rm_style(line): return re.sub(r'<font\s+color="?(\w*?)"?>|</font>|</([ubi])>', "", re.sub(r"<([ubi])>", r"{\\\1}", line))
     def ftime(x): return x.replace(",", ".")[:-1]
     srt = SRT.load(file) if isinstance(file, Path) else file
-    return cls([], [ASSEvent(start=ftime(e.begin), end=ftime(e.end), text=rm_style(e.text[0])) for e in srt.content])
+    return cls([], [ASSEvent(start=ftime(e.begin), end=ftime(e.end), text=rm_style("\\N".join(e.text))) for e in srt.content])
 
   def dump(self, file: Path):
     output = """[Script Info]
@@ -175,6 +174,7 @@ class SubtitleProcessor:
       return out_sub
 
     for file in tqdm(files, position=0):
+      out_subs=defaultdict(list)
       print(f"extracting: {file.name}")
       probe = sp.check_output(["ffprobe",str(file),"-select_streams","s","-show_entries","stream=index:stream_tags=language:stream=codec_name",
                                "-v","quiet","-of","csv=p=0"], stdin=sp.DEVNULL).decode("utf-8").splitlines()
@@ -199,7 +199,7 @@ if __name__ == "__main__":
   group.add_argument("-e", "--extract-sub", action="store_true", help="extract subtitles from .mkv")
 
   args = parser.parse_args()
-
+  print(args )
   def glob(paths, pattern): return [x for p in paths for x in p.glob(pattern)]
   files = [Path(x).resolve() for x in args.file]
   if args.recurse: files += glob(files, "**")
